@@ -60,7 +60,11 @@ export const driverRoutes: FastifyPluginAsyncTypebox<DriverRouteOptions> = async
         response: {
           200: Type.Object({
             data: Type.Array(driverSchema),
-            pagination: Type.Object({ page: Type.Integer(), pageSize: Type.Integer(), total: Type.Integer() }),
+            pagination: Type.Object({
+              page: Type.Integer(),
+              pageSize: Type.Integer(),
+              total: Type.Integer(),
+            }),
           }),
         },
       },
@@ -73,7 +77,10 @@ export const driverRoutes: FastifyPluginAsyncTypebox<DriverRouteOptions> = async
         pageSize,
         ...(request.query.status ? { status: request.query.status } : {}),
       });
-      return { data: result.items.map(serializeDriver), pagination: { page, pageSize, total: result.total } };
+      return {
+        data: result.items.map(serializeDriver),
+        pagination: { page, pageSize, total: result.total },
+      };
     },
   );
 

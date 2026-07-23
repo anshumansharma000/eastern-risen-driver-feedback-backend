@@ -12,6 +12,7 @@ declare module 'fastify' {
 export interface AuthGuards {
   readonly authenticated: preHandlerAsyncHookHandler;
   readonly admin: preHandlerAsyncHookHandler;
+  readonly driver: preHandlerAsyncHookHandler;
 }
 
 export function createAuthGuards(authService: AuthService, cookieName: string): AuthGuards {
@@ -34,5 +35,16 @@ export function createAuthGuards(authService: AuthService, cookieName: string): 
     }
   };
 
-  return { authenticated, admin };
+  const driver: preHandlerAsyncHookHandler = async (request) => {
+    await resolve(request);
+    if (request.auth?.role !== 'DRIVER' || !request.auth.driverId) {
+      throw new AppError({
+        code: 'DRIVER_ACCESS_REQUIRED',
+        message: 'Driver access is required',
+        statusCode: 403,
+      });
+    }
+  };
+
+  return { authenticated, admin, driver };
 }

@@ -13,6 +13,7 @@ export interface AuthRouteOptions {
   readonly guards: AuthGuards;
   readonly cookieName: string;
   readonly secureCookie: boolean;
+  readonly cookieMaxAgeSeconds: number;
 }
 
 export const authRoutes: FastifyPluginAsyncTypebox<AuthRouteOptions> = async (app, options) => {
@@ -21,6 +22,7 @@ export const authRoutes: FastifyPluginAsyncTypebox<AuthRouteOptions> = async (ap
     httpOnly: true,
     sameSite: 'lax' as const,
     secure: options.secureCookie,
+    maxAge: options.cookieMaxAgeSeconds,
   };
 
   app.post(

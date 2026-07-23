@@ -1,5 +1,14 @@
 import { sql } from 'drizzle-orm';
-import { index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import {
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from 'drizzle-orm/pg-core';
 import { authAccounts } from './accounts.js';
 import { outboxStatus } from './enums.js';
 
@@ -20,11 +29,7 @@ export const auditEvents = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    index('audit_events_entity_created_idx').on(
-      table.entityType,
-      table.entityId,
-      table.createdAt,
-    ),
+    index('audit_events_entity_created_idx').on(table.entityType, table.entityId, table.createdAt),
     index('audit_events_actor_created_idx').on(table.actorAccountId, table.createdAt),
   ],
 );

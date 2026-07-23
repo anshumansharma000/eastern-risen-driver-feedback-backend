@@ -33,7 +33,10 @@ export class AuthService {
   async resolveSession(token: string | undefined): Promise<AuthPrincipal> {
     if (!token) throw this.unauthorized();
 
-    const principal = await this.repository.findPrincipalBySessionHash(hashToken(token), this.now());
+    const principal = await this.repository.findPrincipalBySessionHash(
+      hashToken(token),
+      this.now(),
+    );
     if (!principal) throw this.unauthorized();
     return principal;
   }

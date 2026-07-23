@@ -15,11 +15,12 @@ export const healthRoutes: FastifyPluginAsyncTypebox<HealthRouteOptions> = async
         response: { 200: healthResponseSchema },
       },
     },
-    async () => ({
-      status: 'ok',
-      service: 'driver-feedback-api',
-      timestamp: new Date().toISOString(),
-    }) as const,
+    async () =>
+      ({
+        status: 'ok',
+        service: 'driver-feedback-api',
+        timestamp: new Date().toISOString(),
+      }) as const,
   );
 
   app.get(

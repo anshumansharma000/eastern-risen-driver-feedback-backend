@@ -110,9 +110,7 @@ export class VendorService {
   }
 
   async list(input: ListVendorsInput) {
-    const filter = input.status
-      ? eq(vendors.status, input.status)
-      : ne(vendors.status, 'ARCHIVED');
+    const filter = input.status ? eq(vendors.status, input.status) : ne(vendors.status, 'ARCHIVED');
     const offset = (input.page - 1) * input.pageSize;
     const [items, [total]] = await Promise.all([
       this.db

@@ -8,5 +8,4 @@ coverage/
 .DS_Store
 .idea/
 .vscode/
-PRODUCT.md
-README.md
+*.md

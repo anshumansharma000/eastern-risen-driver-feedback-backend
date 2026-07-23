@@ -1,10 +1,7 @@
 import { Type } from 'typebox';
 import { lifecycleStatusSchema } from '../vendors/vendor.schemas.js';
 
-export const driverSourceSchema = Type.Union([
-  Type.Literal('AGENCY'),
-  Type.Literal('OUTSOURCED'),
-]);
+export const driverSourceSchema = Type.Union([Type.Literal('AGENCY'), Type.Literal('OUTSOURCED')]);
 
 export const driverSchema = Type.Object({
   id: Type.String({ format: 'uuid' }),

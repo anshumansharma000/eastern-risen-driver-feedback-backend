@@ -128,7 +128,11 @@ export class DriverService {
       .where(eq(drivers.id, id))
       .limit(1);
     if (!current) {
-      throw new AppError({ code: 'DRIVER_NOT_FOUND', message: 'Driver was not found', statusCode: 404 });
+      throw new AppError({
+        code: 'DRIVER_NOT_FOUND',
+        message: 'Driver was not found',
+        statusCode: 404,
+      });
     }
 
     const sourceType = input.sourceType ?? current.sourceType;
@@ -141,9 +145,7 @@ export class DriverService {
           await tx
             .update(authAccounts)
             .set({
-              ...(input.displayName !== undefined
-                ? { displayName: input.displayName.trim() }
-                : {}),
+              ...(input.displayName !== undefined ? { displayName: input.displayName.trim() } : {}),
               ...(input.email !== undefined ? { email: input.email.trim().toLowerCase() } : {}),
               updatedAt: new Date(),
             })
@@ -204,7 +206,11 @@ export class DriverService {
       .leftJoin(vendors, eq(vendors.id, drivers.vendorId));
 
     const [items, [total]] = await Promise.all([
-      baseJoin.where(filter).orderBy(asc(authAccounts.displayName)).limit(input.pageSize).offset(offset),
+      baseJoin
+        .where(filter)
+        .orderBy(asc(authAccounts.displayName))
+        .limit(input.pageSize)
+        .offset(offset),
       this.db
         .select({ value: count() })
         .from(drivers)

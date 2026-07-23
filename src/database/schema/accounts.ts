@@ -1,13 +1,5 @@
 import { sql } from 'drizzle-orm';
-import {
-  check,
-  index,
-  pgTable,
-  text,
-  timestamp,
-  uniqueIndex,
-  uuid,
-} from 'drizzle-orm/pg-core';
+import { check, index, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { accountRole, lifecycleStatus } from './enums.js';
 
 export const authAccounts = pgTable(

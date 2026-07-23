@@ -1,0 +1,21 @@
+export const loggerRedaction = {
+  paths: [
+    'req.headers.authorization',
+    'req.headers.cookie',
+    'req.body.password',
+    'req.body.phone',
+    'req.body.email',
+    'req.body.respondent',
+    'req.body.questionnaireSnapshot',
+    'req.body.answers',
+    'res.headers.set-cookie',
+    'password',
+    'phone',
+    'email',
+    'respondent',
+    'questionnaireSnapshot',
+    'answers',
+    'err.config.password',
+  ],
+  censor: '[REDACTED]',
+};

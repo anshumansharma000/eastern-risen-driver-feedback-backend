@@ -48,11 +48,54 @@ describe('application infrastructure', () => {
     app = await buildApp({ exposeDocs: false });
 
     const response = await app.inject({ method: 'GET', url: '/missing' });
+    const body = response.json<{ error: { code: string; message: string; requestId: string } }>();
 
     expect(response.statusCode).toBe(404);
-    expect(response.json()).toMatchObject({
-      error: { code: 'ROUTE_NOT_FOUND' },
+    expect(body).toMatchObject({
+      error: {
+        code: 'ROUTE_NOT_FOUND',
+        message: 'Route GET /missing was not found',
+      },
     });
+    expect(body.error.requestId).toBeTruthy();
+    expect(response.headers['x-request-id']).toBe(body.error.requestId);
+  });
+
+  it('normalizes framework HTTP errors into the standard envelope', async () => {
+    app = await buildApp({ exposeDocs: false });
+    app.get('/test-http-error', async () => {
+      throw Object.assign(new Error('raw framework message'), { statusCode: 413 });
+    });
+
+    const response = await app.inject({ method: 'GET', url: '/test-http-error' });
+
+    expect(response.statusCode).toBe(413);
+    expect(response.json()).toMatchObject({
+      error: {
+        code: 'REQUEST_BODY_TOO_LARGE',
+        message: 'The request body is too large',
+        requestId: response.headers['x-request-id'],
+      },
+    });
+    expect(response.body).not.toContain('raw framework message');
+  });
+
+  it('documents the shared error response in OpenAPI', async () => {
+    app = await buildApp({ exposeDocs: true });
+
+    const response = await app.inject({ method: 'GET', url: '/docs/json' });
+    const document = response.json<{
+      components: { schemas: Record<string, { required?: string[] }> };
+      paths: { '/health/live': { get: { responses: Record<string, unknown> } } };
+    }>();
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(
+      Object.values(document.components.schemas).some((schema) =>
+        schema.required?.includes('error'),
+      ),
+    ).toBe(true);
+    expect(document.paths['/health/live'].get.responses['500']).toBeTruthy();
   });
 
   it('rejects state-changing requests from unapproved browser origins', async () => {

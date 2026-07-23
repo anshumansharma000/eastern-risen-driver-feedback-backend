@@ -66,7 +66,11 @@ export const vendorRoutes: FastifyPluginAsyncTypebox<VendorRouteOptions> = async
         response: {
           200: Type.Object({
             data: Type.Array(vendorSchema),
-            pagination: Type.Object({ page: Type.Integer(), pageSize: Type.Integer(), total: Type.Integer() }),
+            pagination: Type.Object({
+              page: Type.Integer(),
+              pageSize: Type.Integer(),
+              total: Type.Integer(),
+            }),
           }),
         },
       },

@@ -1,0 +1,9 @@
+node_modules
+dist
+coverage
+drizzle
+package-lock.json
+PRODUCT.md
+DATA_MODEL.md
+.env
+.env.*

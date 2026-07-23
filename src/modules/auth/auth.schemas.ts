@@ -30,4 +30,6 @@ export const loginResponseSchema = Type.Object({
   }),
 });
 
-export const currentUserResponseSchema = Type.Object({ data: Type.Object({ user: principalSchema }) });
+export const currentUserResponseSchema = Type.Object({
+  data: Type.Object({ user: principalSchema }),
+});

@@ -1,0 +1,1 @@
+ALTER TABLE "feedback_handoffs" ADD COLUMN "token_ciphertext" text NOT NULL;

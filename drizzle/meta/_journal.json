@@ -22,6 +22,27 @@
       "when": 1784646835051,
       "tag": "0002_mean_blue_marvel",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1784661743870,
+      "tag": "0003_mighty_saracen",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1784663283923,
+      "tag": "0004_round_thanos",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1784663645678,
+      "tag": "0005_loud_yellow_claw",
+      "breakpoints": true
     }
   ]
 }

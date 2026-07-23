@@ -17,6 +17,9 @@ export function createDatabaseClient(config: AppConfig): DatabaseClient {
     connectionString: config.databaseUrl,
     ssl: config.databaseSsl,
     max: config.databaseMaxConnections,
+    connectionTimeoutMillis: config.databaseConnectionTimeoutMs,
+    idleTimeoutMillis: config.databaseIdleTimeoutMs,
+    statement_timeout: config.databaseStatementTimeoutMs,
     application_name: 'driver-feedback-api',
   });
   const db = drizzle({ client: pool, schema });

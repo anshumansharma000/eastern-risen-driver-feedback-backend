@@ -12,9 +12,20 @@ export interface AppConfig {
   readonly databaseSsl: false | ConnectionOptions;
   readonly databaseSslMode: DatabaseSslMode;
   readonly databaseMaxConnections: number;
+  readonly databaseConnectionTimeoutMs: number;
+  readonly databaseIdleTimeoutMs: number;
+  readonly databaseStatementTimeoutMs: number;
   readonly sessionCookieName: string;
   readonly sessionTtlHours: number;
+  readonly feedbackHandoffTtlHours: number;
+  readonly dataEncryptionKey: Buffer;
   readonly frontendOrigins: readonly string[];
+  readonly trustProxyHops: number;
+  readonly connectionTimeoutMs: number;
+  readonly requestTimeoutMs: number;
+  readonly keepAliveTimeoutMs: number;
+  readonly shutdownTimeoutMs: number;
+  readonly bodyLimitBytes: number;
 }
 
 function parseNodeEnvironment(value: string | undefined): NodeEnvironment {
@@ -37,6 +48,18 @@ function parsePositiveInteger(name: string, value: string | undefined, fallback:
   return parsed;
 }
 
+function parseNonNegativeInteger(
+  name: string,
+  value: string | undefined,
+  fallback: number,
+): number {
+  const parsed = Number(value ?? fallback);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`${name} must be a non-negative integer`);
+  }
+  return parsed;
+}
+
 export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppConfig {
   const nodeEnv = parseNodeEnvironment(environment.NODE_ENV);
   const databaseUrl = environment.DATABASE_URL;
@@ -45,6 +68,14 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     throw new Error('DATABASE_URL is required');
   }
   const databaseConnection = resolveDatabaseConnection(databaseUrl, environment);
+
+  const frontendOrigins = parseOrigins(environment.FRONTEND_ORIGINS);
+  if (nodeEnv === 'production' && databaseConnection.sslMode === 'disable') {
+    throw new Error('DATABASE_SSL_MODE must require TLS in production');
+  }
+  if (nodeEnv === 'production' && frontendOrigins.length === 0) {
+    throw new Error('FRONTEND_ORIGINS is required in production');
+  }
 
   return {
     nodeEnv,
@@ -59,10 +90,71 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
       environment.DATABASE_MAX_CONNECTIONS,
       10,
     ),
+    databaseConnectionTimeoutMs: parsePositiveInteger(
+      'DATABASE_CONNECTION_TIMEOUT_MS',
+      environment.DATABASE_CONNECTION_TIMEOUT_MS,
+      10_000,
+    ),
+    databaseIdleTimeoutMs: parsePositiveInteger(
+      'DATABASE_IDLE_TIMEOUT_MS',
+      environment.DATABASE_IDLE_TIMEOUT_MS,
+      30_000,
+    ),
+    databaseStatementTimeoutMs: parsePositiveInteger(
+      'DATABASE_STATEMENT_TIMEOUT_MS',
+      environment.DATABASE_STATEMENT_TIMEOUT_MS,
+      30_000,
+    ),
     sessionCookieName: environment.SESSION_COOKIE_NAME ?? 'id',
     sessionTtlHours: parsePositiveInteger('SESSION_TTL_HOURS', environment.SESSION_TTL_HOURS, 12),
-    frontendOrigins: parseOrigins(environment.FRONTEND_ORIGINS),
+    feedbackHandoffTtlHours: parsePositiveInteger(
+      'FEEDBACK_HANDOFF_TTL_HOURS',
+      environment.FEEDBACK_HANDOFF_TTL_HOURS,
+      168,
+    ),
+    dataEncryptionKey: parseDataEncryptionKey(environment.DATA_ENCRYPTION_KEY_BASE64, nodeEnv),
+    frontendOrigins,
+    trustProxyHops: parseNonNegativeInteger('TRUST_PROXY_HOPS', environment.TRUST_PROXY_HOPS, 0),
+    connectionTimeoutMs: parsePositiveInteger(
+      'CONNECTION_TIMEOUT_MS',
+      environment.CONNECTION_TIMEOUT_MS,
+      10_000,
+    ),
+    requestTimeoutMs: parsePositiveInteger(
+      'REQUEST_TIMEOUT_MS',
+      environment.REQUEST_TIMEOUT_MS,
+      30_000,
+    ),
+    keepAliveTimeoutMs: parsePositiveInteger(
+      'KEEP_ALIVE_TIMEOUT_MS',
+      environment.KEEP_ALIVE_TIMEOUT_MS,
+      72_000,
+    ),
+    shutdownTimeoutMs: parsePositiveInteger(
+      'SHUTDOWN_TIMEOUT_MS',
+      environment.SHUTDOWN_TIMEOUT_MS,
+      10_000,
+    ),
+    bodyLimitBytes: parsePositiveInteger(
+      'BODY_LIMIT_BYTES',
+      environment.BODY_LIMIT_BYTES,
+      1_048_576,
+    ),
   };
+}
+
+function parseDataEncryptionKey(value: string | undefined, nodeEnv: NodeEnvironment): Buffer {
+  if (!value) {
+    if (nodeEnv === 'production') {
+      throw new Error('DATA_ENCRYPTION_KEY_BASE64 is required in production');
+    }
+    return Buffer.alloc(32);
+  }
+  const key = Buffer.from(value, 'base64');
+  if (key.length !== 32) {
+    throw new Error('DATA_ENCRYPTION_KEY_BASE64 must decode to exactly 32 bytes');
+  }
+  return key;
 }
 
 function parseOrigins(value: string | undefined): readonly string[] {
