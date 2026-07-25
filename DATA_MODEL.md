@@ -2,7 +2,7 @@
 
 **Status:** Initial logical design  
 **Derived from:** [PRODUCT.md](PRODUCT.md)  
-**Last updated:** 2026-07-20  
+**Last updated:** 2026-07-25
 **Scope:** Backend persistence, integrity rules, offline synchronization boundary, analytics, rewards, and auditability
 
 ## 1. Purpose
@@ -96,10 +96,10 @@ Represents a person who can authenticate. Passengers are not accounts.
 | `id` | UUID | No | Primary key |
 | `role` | enum | No | `ADMIN` or `DRIVER` |
 | `display_name` | text | No | Name shown in authenticated UI and audit logs |
-| `email` | normalized text | No | Required for reset links; unique case-insensitively |
+| `email` | normalized text | No | Account contact identifier; unique case-insensitively |
 | `password_hash` | text | No | Adaptive password hash only |
 | `status` | enum | No | `ACTIVE`, `DEACTIVATED`, or `ARCHIVED` |
-| `password_changed_at` | timestamp | No | Invalidates older sessions/reset links as defined by auth policy |
+| `password_changed_at` | timestamp | No | Invalidates older sessions as defined by auth policy |
 | `last_login_at` | timestamp | Yes | Operational metadata |
 | `created_at` | timestamp | No | |
 | `updated_at` | timestamp | No | |
@@ -136,9 +136,11 @@ Constraints:
 
 Changing a driver's source or vendor affects future trips only. Existing trips retain source/vendor snapshots.
 
-### 5.3 `password_reset_tokens`
+### 5.3 `password_reset_tokens` (reserved)
 
-Stores single-use password-reset challenges.
+Legacy schema reserved for a possible future token-based reset flow. The
+current product exposes no public or email password-reset workflow; an
+administrator directly updates a driver's password.
 
 | Column | Logical type | Null | Notes |
 | --- | --- | --- | --- |
@@ -150,7 +152,9 @@ Stores single-use password-reset challenges.
 | `used_at` | timestamp | Yes | Single-use marker |
 | `created_at` | timestamp | No | |
 
-The raw token exists only in the reset link delivered to the user.
+No current service creates or consumes these records. Direct administrator
+resets hash the submitted password, update `password_changed_at`, revoke active
+driver sessions, and write an audit event that never includes the password.
 
 ### 5.4 `agency_settings`
 
@@ -747,7 +751,7 @@ Generic append-only administrative/security event log.
 | `metadata` | JSON object | No | Allowlisted, non-sensitive context |
 | `created_at` | timestamp | No | |
 
-Examples include driver deactivation, password-reset initiation, questionnaire publication, coupon import, feedback flag/archive, reward configuration, and export generation.
+Examples include driver deactivation, direct administrator password reset, questionnaire publication, coupon import, feedback flag/archive, reward configuration, and export generation.
 
 Audit metadata must never contain raw passwords, reset tokens, passenger contact values, or coupon codes.
 
@@ -862,7 +866,8 @@ Exact HTTP status mappings belong in the API specification.
 
 The logical model can proceed while these are unresolved, but physical migrations or behavior may need refinement:
 
-1. Negative-feedback threshold/classification rule.
+1. Initial agency-selected negative-feedback threshold; the persisted setting is
+   nullable and constrained to 1–5.
 2. Reward probability semantics and whether a no-prize outcome is always available.
 3. Whether passenger-entered booking reference must exactly match the trip booking reference.
 4. Final personal-data retention period and encryption/key-management service.
@@ -908,3 +913,4 @@ Before the model is considered implemented, automated tests must prove:
 | Date | Change |
 | --- | --- |
 | 2026-07-20 | Initial logical data model created from `PRODUCT.md`. |
+| 2026-07-25 | Added configurable nullable negative-feedback threshold and implemented feedback review history plus real-time aggregate read contracts. |

@@ -12,6 +12,7 @@ import {
   consentVersions,
   feedbackAnswers,
   feedbackHandoffs,
+  feedbackReviewEvents,
   feedbackSubmissions,
   questionnaireVersions,
   questionnaires,
@@ -32,6 +33,7 @@ integration('vehicle and trip APIs', () => {
   let otherDriverAccountId: string;
   let otherDriverId: string;
   let vehicleId: string;
+  let businessVehicleId: string;
   let questionnaireId: string;
   let questionnaireVersionId: string;
   let consentVersionId: string;
@@ -46,7 +48,8 @@ integration('vehicle and trip APIs', () => {
     const config = loadConfig({
       NODE_ENV: 'test',
       DATABASE_URL: databaseUrl,
-      SESSION_TTL_HOURS: '12',
+      SESSION_IDLE_TTL_HOURS: '72',
+      SESSION_ABSOLUTE_TTL_DAYS: '30',
     });
     database = createDatabaseClient(config);
     const passwordHash = await passwordHasher.hash(password);
@@ -111,6 +114,9 @@ integration('vehicle and trip APIs', () => {
     await app?.close();
     if (submissionIds.length) {
       await database.db
+        .delete(feedbackReviewEvents)
+        .where(inArray(feedbackReviewEvents.feedbackSubmissionId, submissionIds));
+      await database.db
         .delete(feedbackAnswers)
         .where(inArray(feedbackAnswers.feedbackSubmissionId, submissionIds));
       await database.db
@@ -143,7 +149,9 @@ integration('vehicle and trip APIs', () => {
     await database.db
       .delete(authAccounts)
       .where(inArray(authAccounts.id, [adminAccountId, driverAccountId, otherDriverAccountId]));
-    if (vehicleId) await database.db.delete(vehicles).where(inArray(vehicles.id, [vehicleId]));
+    const vehicleIds = [vehicleId, businessVehicleId].filter(Boolean);
+    if (vehicleIds.length)
+      await database.db.delete(vehicles).where(inArray(vehicles.id, vehicleIds));
     await database.close();
   });
 
@@ -191,6 +199,17 @@ integration('vehicle and trip APIs', () => {
     }>().data;
     questionnaireId = questionnaireData.questionnaire.id;
     questionnaireVersionId = questionnaireData.draftVersionId;
+
+    const questionnaireList = await app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/questionnaires?page=1&pageSize=1',
+      headers: { cookie: adminCookie },
+    });
+    expect(questionnaireList.statusCode).toBe(200);
+    expect(questionnaireList.json()).toMatchObject({
+      data: [{ id: questionnaireId }],
+      pagination: { page: 1, pageSize: 1, total: 1 },
+    });
 
     const questions = await app.inject({
       method: 'PUT',
@@ -263,6 +282,26 @@ integration('vehicle and trip APIs', () => {
     expect(clonedDraft.statusCode).toBe(201);
     const clonedDraftId = clonedDraft.json<{ data: { id: string } }>().data.id;
     expect(clonedDraft.json()).toMatchObject({ data: { versionNumber: 2, status: 'DRAFT' } });
+    const firstVersionPage = await app.inject({
+      method: 'GET',
+      url: `/api/v1/admin/questionnaires/${questionnaireId}/versions?page=1&pageSize=1`,
+      headers: { cookie: adminCookie },
+    });
+    expect(firstVersionPage.statusCode).toBe(200);
+    expect(firstVersionPage.json()).toMatchObject({
+      data: [{ id: clonedDraftId, versionNumber: 2 }],
+      pagination: { page: 1, pageSize: 1, total: 2 },
+    });
+    const secondVersionPage = await app.inject({
+      method: 'GET',
+      url: `/api/v1/admin/questionnaires/${questionnaireId}/versions?page=2&pageSize=1`,
+      headers: { cookie: adminCookie },
+    });
+    expect(secondVersionPage.statusCode).toBe(200);
+    expect(secondVersionPage.json()).toMatchObject({
+      data: [{ id: questionnaireVersionId, versionNumber: 1 }],
+      pagination: { page: 2, pageSize: 1, total: 2 },
+    });
     const archivedDraft = await app.inject({
       method: 'POST',
       url: `/api/v1/admin/questionnaires/${questionnaireId}/versions/${clonedDraftId}/archive`,
@@ -341,9 +380,226 @@ integration('vehicle and trip APIs', () => {
     expect(archived.json()).toMatchObject({ data: { status: 'ARCHIVED' } });
   }, 20_000);
 
+  it('enforces trip assignment availability and scheduling rules', async () => {
+    const adminCookie = await login('/api/v1/auth/admin/login', { email: adminEmail, password });
+    const vehicleResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/vehicles',
+      headers: { cookie: adminCookie },
+      payload: { registrationNumber: `wb 02 ${suffix}`, displayName: 'Backup Crysta' },
+    });
+    expect(vehicleResponse.statusCode).toBe(201);
+    businessVehicleId = vehicleResponse.json<{ data: { id: string } }>().data.id;
+
+    const base = {
+      ...tripPayload(driverId),
+      bookingReference: `RULE-${suffix}`,
+      scheduledAt: '2031-08-10T04:30:00.000Z',
+      scheduledEndAt: '2031-08-10T05:30:00.000Z',
+    };
+    const create = (payload: Record<string, unknown>) =>
+      app.inject({
+        method: 'POST',
+        url: '/api/v1/admin/trips',
+        headers: { cookie: adminCookie },
+        payload,
+      });
+
+    expect((await create(base)).statusCode).toBe(201);
+
+    const duplicate = await create({
+      ...base,
+      bookingReference: base.bookingReference.toLowerCase(),
+      driverId: otherDriverId,
+      vehicleId: businessVehicleId,
+      scheduledAt: '2031-08-10T07:00:00.000Z',
+      scheduledEndAt: '2031-08-10T08:00:00.000Z',
+    });
+    expect(duplicate.statusCode).toBe(409);
+    expect(duplicate.json()).toMatchObject({
+      error: { code: 'TRIP_BOOKING_REFERENCE_ALREADY_EXISTS' },
+    });
+
+    const driverConflict = await create({
+      ...base,
+      bookingReference: `DRIVER-CONFLICT-${suffix}`,
+      vehicleId: businessVehicleId,
+    });
+    expect(driverConflict.statusCode).toBe(409);
+    expect(driverConflict.json()).toMatchObject({
+      error: { code: 'DRIVER_SCHEDULE_CONFLICT' },
+    });
+
+    const vehicleConflict = await create({
+      ...base,
+      bookingReference: `VEHICLE-CONFLICT-${suffix}`,
+      driverId: otherDriverId,
+    });
+    expect(vehicleConflict.statusCode).toBe(409);
+    expect(vehicleConflict.json()).toMatchObject({
+      error: { code: 'VEHICLE_SCHEDULE_CONFLICT' },
+    });
+
+    const past = await create({
+      ...base,
+      bookingReference: `PAST-${suffix}`,
+      scheduledAt: '2020-01-01T04:30:00.000Z',
+      scheduledEndAt: '2020-01-01T05:30:00.000Z',
+    });
+    expect(past.statusCode).toBe(400);
+    expect(past.json()).toMatchObject({
+      error: { code: 'TRIP_CANNOT_BE_SCHEDULED_IN_PAST' },
+    });
+
+    const sameLocation = await create({
+      ...base,
+      bookingReference: `LOCATION-${suffix}`,
+      pickupLocation: '  Kolkata   Airport ',
+      destination: 'kolkata airport',
+      scheduledAt: '2031-08-11T04:30:00.000Z',
+      scheduledEndAt: '2031-08-11T05:30:00.000Z',
+    });
+    expect(sameLocation.statusCode).toBe(400);
+    expect(sameLocation.json()).toMatchObject({
+      error: { code: 'TRIP_LOCATIONS_MUST_DIFFER' },
+    });
+
+    const availabilityUpdate = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/admin/drivers/${driverId}`,
+      headers: { cookie: adminCookie },
+      payload: { assignmentEnabled: false },
+    });
+    expect(availabilityUpdate.statusCode).toBe(200);
+    const unavailable = await create({
+      ...base,
+      bookingReference: `UNAVAILABLE-${suffix}`,
+      scheduledAt: '2031-08-11T04:30:00.000Z',
+      scheduledEndAt: '2031-08-11T05:30:00.000Z',
+    });
+    expect(unavailable.statusCode).toBe(409);
+    expect(unavailable.json()).toMatchObject({
+      error: { code: 'DRIVER_NOT_AVAILABLE_FOR_ASSIGNMENT' },
+    });
+    await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/admin/drivers/${driverId}`,
+      headers: { cookie: adminCookie },
+      payload: { assignmentEnabled: true },
+    });
+
+    const leaveResponse = await app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/drivers/${driverId}/leaves`,
+      headers: { cookie: adminCookie },
+      payload: {
+        startsAt: '2031-08-11T04:00:00.000Z',
+        endsAt: '2031-08-11T06:00:00.000Z',
+        reason: 'Planned leave',
+      },
+    });
+    expect(leaveResponse.statusCode).toBe(201);
+    const leaveId = leaveResponse.json<{ data: { id: string } }>().data.id;
+    const leaves = await app.inject({
+      method: 'GET',
+      url: `/api/v1/admin/drivers/${driverId}/leaves?page=1&pageSize=1`,
+      headers: { cookie: adminCookie },
+    });
+    expect(leaves.statusCode).toBe(200);
+    expect(leaves.json()).toMatchObject({
+      data: [{ id: leaveId }],
+      pagination: { page: 1, pageSize: 1, total: 1 },
+    });
+    const onLeave = await create({
+      ...base,
+      bookingReference: `LEAVE-${suffix}`,
+      scheduledAt: '2031-08-11T04:30:00.000Z',
+      scheduledEndAt: '2031-08-11T05:30:00.000Z',
+    });
+    expect(onLeave.statusCode).toBe(409);
+    expect(onLeave.json()).toMatchObject({ error: { code: 'DRIVER_ON_LEAVE' } });
+    expect(
+      (
+        await app.inject({
+          method: 'DELETE',
+          url: `/api/v1/admin/drivers/${driverId}/leaves/${leaveId}`,
+          headers: { cookie: adminCookie },
+        })
+      ).statusCode,
+    ).toBe(204);
+
+    const shiftUpdate = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/admin/drivers/${driverId}`,
+      headers: { cookie: adminCookie },
+      payload: {
+        shiftStartTime: '10:00',
+        shiftEndTime: '18:00',
+        timeZone: 'Asia/Kolkata',
+      },
+    });
+    expect(shiftUpdate.statusCode).toBe(200);
+    const outsideShift = await create({
+      ...base,
+      bookingReference: `SHIFT-${suffix}`,
+      scheduledAt: '2031-08-12T03:30:00.000Z',
+      scheduledEndAt: '2031-08-12T04:30:00.000Z',
+    });
+    expect(outsideShift.statusCode).toBe(409);
+    expect(outsideShift.json()).toMatchObject({
+      error: { code: 'TRIP_OUTSIDE_DRIVER_SHIFT' },
+    });
+
+    await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/admin/drivers/${driverId}`,
+      headers: { cookie: adminCookie },
+      payload: {
+        shiftStartTime: null,
+        shiftEndTime: null,
+        maxDailyDutyMinutes: 90,
+      },
+    });
+    const dutyLimit = await create({
+      ...base,
+      bookingReference: `DUTY-${suffix}`,
+      vehicleId: businessVehicleId,
+      scheduledAt: '2031-08-10T05:30:00.000Z',
+      scheduledEndAt: '2031-08-10T06:15:00.000Z',
+    });
+    expect(dutyLimit.statusCode).toBe(409);
+    expect(dutyLimit.json()).toMatchObject({
+      error: { code: 'DRIVER_DAILY_DUTY_LIMIT_EXCEEDED' },
+    });
+    await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/admin/drivers/${driverId}`,
+      headers: { cookie: adminCookie },
+      payload: { maxDailyDutyMinutes: 720 },
+    });
+  }, 20_000);
+
   it('submits driver-entered trip feedback idempotently and rejects inactive vehicles', async () => {
     const adminCookie = await login('/api/v1/auth/admin/login', { email: adminEmail, password });
     const driverCookie = await login('/api/v1/auth/driver/login', { driverCode, password });
+    const settingsUpdate = await app.inject({
+      method: 'PATCH',
+      url: '/api/v1/admin/settings',
+      headers: { cookie: adminCookie },
+      payload: {
+        agencyName: 'Eastern Risen Test',
+        timezone: 'Asia/Kolkata',
+        defaultThankYouMessage: 'Thank you from the integration test.',
+        negativeFeedbackThreshold: 4,
+      },
+    });
+    expect(settingsUpdate.statusCode, settingsUpdate.body).toBe(200);
+    expect(settingsUpdate.json()).toMatchObject({
+      data: {
+        agencyName: 'Eastern Risen Test',
+        negativeFeedbackThreshold: 4,
+      },
+    });
     const payload = tripPayload(driverId);
     const selfCreated = await app.inject({
       method: 'POST',
@@ -355,6 +611,7 @@ integration('vehicle and trip APIs', () => {
         pickupLocation: payload.pickupLocation,
         destination: payload.destination,
         scheduledAt: payload.scheduledAt,
+        scheduledEndAt: payload.scheduledEndAt,
         vehicleId: payload.vehicleId,
       },
     });
@@ -391,6 +648,11 @@ integration('vehicle and trip APIs', () => {
     expect(context.statusCode).toBe(200);
     const contextData = context.json<{
       data: {
+        completion: {
+          agencyName: string;
+          timezone: string;
+          thankYouMessage: string;
+        };
         questionnaire: {
           questionnaireVersionId: string;
           questions: { id: string; stableKey: string }[];
@@ -399,6 +661,11 @@ integration('vehicle and trip APIs', () => {
     }>().data;
     expect(contextData.questionnaire.questionnaireVersionId).toBe(questionnaireVersionId);
     expect(contextData.questionnaire.questions).toHaveLength(3);
+    expect(contextData.completion).toEqual({
+      agencyName: 'Eastern Risen Test',
+      timezone: 'Asia/Kolkata',
+      thankYouMessage: 'Thank you from the integration test.',
+    });
     const questionId = (stableKey: string) =>
       contextData.questionnaire.questions.find((question) => question.stableKey === stableKey)!.id;
 
@@ -478,6 +745,152 @@ integration('vehicle and trip APIs', () => {
     expect(stored[0]?.phone).not.toContain('9876543210');
     expect(stored[0]?.email).not.toContain('passenger@example.com');
 
+    const driverPerformance = await app.inject({
+      method: 'GET',
+      url: '/api/v1/driver/performance?month=2026-08',
+      headers: { cookie: driverCookie },
+    });
+    expect(driverPerformance.statusCode, driverPerformance.body).toBe(200);
+    expect(driverPerformance.json()).toMatchObject({
+      data: {
+        driverId,
+        overall: { averageScore: 5, responseCount: 1, answerCount: 2 },
+        meta: { timezone: 'Asia/Kolkata', dateBasis: 'SUBMITTED_AT', month: '2026-08' },
+      },
+    });
+
+    const analytics = await app.inject({
+      method: 'GET',
+      url: `/api/v1/admin/analytics?month=2026-08&driverId=${driverId}`,
+      headers: { cookie: adminCookie },
+    });
+    expect(analytics.statusCode, analytics.body).toBe(200);
+    expect(analytics.json()).toMatchObject({
+      data: {
+        overall: { averageScore: 5, responseCount: 1, answerCount: 2 },
+        negativeFeedbackCount: 0,
+        negativeFeedbackThreshold: 4,
+        drivers: [{ driver: { id: driverId } }],
+      },
+    });
+
+    const feedbackList = await app.inject({
+      method: 'GET',
+      url: `/api/v1/admin/feedback?month=2026-08&driverId=${driverId}`,
+      headers: { cookie: adminCookie },
+    });
+    expect(feedbackList.statusCode, feedbackList.body).toBe(200);
+    expect(feedbackList.json()).toMatchObject({
+      data: [{ id: receipt.id, respondentName: 'Passenger One', overallScore: 5 }],
+      pagination: { total: 1 },
+      meta: { timezone: 'Asia/Kolkata', dateBasis: 'SUBMITTED_AT' },
+    });
+    const negativeFeedbackList = await app.inject({
+      method: 'GET',
+      url: `/api/v1/admin/feedback?month=2026-08&driverId=${driverId}&negativeOnly=true`,
+      headers: { cookie: adminCookie },
+    });
+    expect(negativeFeedbackList.statusCode, negativeFeedbackList.body).toBe(200);
+    expect(negativeFeedbackList.json()).toMatchObject({
+      data: [],
+      pagination: { total: 0 },
+    });
+
+    const feedbackDetail = await app.inject({
+      method: 'GET',
+      url: `/api/v1/admin/feedback/${receipt.id}`,
+      headers: { cookie: adminCookie },
+    });
+    expect(feedbackDetail.statusCode, feedbackDetail.body).toBe(200);
+    expect(feedbackDetail.json()).toMatchObject({
+      data: {
+        id: receipt.id,
+        respondent: {
+          phone: '+91-9876543210',
+          email: 'passenger@example.com',
+        },
+        answers: [
+          { stableKey: 'overall_experience', numericScore: 5 },
+          { stableKey: 'recommend_driver', numericScore: 5 },
+          { stableKey: 'comments', numericScore: null },
+        ],
+        reviewHistory: [],
+      },
+    });
+
+    const flag = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/admin/feedback/${receipt.id}/review-state`,
+      headers: { cookie: adminCookie },
+      payload: { state: 'FLAGGED', reason: 'Needs review' },
+    });
+    expect(flag.statusCode, flag.body).toBe(200);
+    expect(flag.json()).toMatchObject({ data: { reviewState: 'FLAGGED' } });
+
+    const unflag = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/admin/feedback/${receipt.id}/review-state`,
+      headers: { cookie: adminCookie },
+      payload: { state: 'NORMAL', reason: 'Reviewed' },
+    });
+    expect(unflag.statusCode, unflag.body).toBe(200);
+    expect(unflag.json()).toMatchObject({ data: { reviewState: 'NORMAL' } });
+
+    const reflag = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/admin/feedback/${receipt.id}/review-state`,
+      headers: { cookie: adminCookie },
+      payload: { state: 'FLAGGED' },
+    });
+    expect(reflag.statusCode, reflag.body).toBe(200);
+
+    const archiveWithoutReason = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/admin/feedback/${receipt.id}/review-state`,
+      headers: { cookie: adminCookie },
+      payload: { state: 'ARCHIVED' },
+    });
+    expect(archiveWithoutReason.statusCode).toBe(400);
+    expect(archiveWithoutReason.json()).toMatchObject({
+      error: { code: 'FEEDBACK_ARCHIVE_REASON_REQUIRED' },
+    });
+
+    const archive = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/admin/feedback/${receipt.id}/review-state`,
+      headers: { cookie: adminCookie },
+      payload: { state: 'ARCHIVED', reason: 'Duplicate operational record' },
+    });
+    expect(archive.statusCode, archive.body).toBe(200);
+    expect(archive.json()).toMatchObject({ data: { reviewState: 'ARCHIVED' } });
+
+    const archivedPerformance = await app.inject({
+      method: 'GET',
+      url: '/api/v1/driver/performance?month=2026-08',
+      headers: { cookie: driverCookie },
+    });
+    expect(archivedPerformance.statusCode, archivedPerformance.body).toBe(200);
+    expect(archivedPerformance.json()).toMatchObject({
+      data: { overall: { averageScore: null, responseCount: 0, answerCount: 0 } },
+    });
+
+    const clearThreshold = await app.inject({
+      method: 'PATCH',
+      url: '/api/v1/admin/settings',
+      headers: { cookie: adminCookie },
+      payload: { negativeFeedbackThreshold: null },
+    });
+    expect(clearThreshold.statusCode, clearThreshold.body).toBe(200);
+    const unavailableNegativeFilter = await app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/feedback?negativeOnly=true',
+      headers: { cookie: adminCookie },
+    });
+    expect(unavailableNegativeFilter.statusCode).toBe(409);
+    expect(unavailableNegativeFilter.json()).toMatchObject({
+      error: { code: 'NEGATIVE_FEEDBACK_THRESHOLD_REQUIRED' },
+    });
+
     const submittedTrip = await database.db
       .select({ status: trips.status })
       .from(trips)
@@ -494,7 +907,8 @@ integration('vehicle and trip APIs', () => {
         passengerName: payload.passengerName,
         pickupLocation: payload.pickupLocation,
         destination: payload.destination,
-        scheduledAt: payload.scheduledAt,
+        scheduledAt: '2030-08-10T06:30:00.000Z',
+        scheduledEndAt: '2030-08-10T07:30:00.000Z',
         vehicleId: payload.vehicleId,
       },
     });
@@ -550,7 +964,8 @@ integration('vehicle and trip APIs', () => {
       passengerName: 'Integration Passenger',
       pickupLocation: 'Kolkata Airport',
       destination: 'Darjeeling',
-      scheduledAt: '2026-08-10T04:30:00.000Z',
+      scheduledAt: '2030-08-10T04:30:00.000Z',
+      scheduledEndAt: '2030-08-10T05:30:00.000Z',
       vehicleId,
       driverId: assignedDriverId,
     };

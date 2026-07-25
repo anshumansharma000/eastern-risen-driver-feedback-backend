@@ -44,6 +44,11 @@ export const passengerContextSchema = Type.Object({
     questions: Type.Array(passengerQuestionSchema),
   }),
   consent: consentSchema,
+  completion: Type.Object({
+    agencyName: Type.String(),
+    timezone: Type.String(),
+    thankYouMessage: Type.String(),
+  }),
 });
 
 export const passengerContextResponseSchema = Type.Object({ data: passengerContextSchema });

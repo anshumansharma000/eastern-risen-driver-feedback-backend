@@ -94,7 +94,7 @@ export class VehicleService {
         .select()
         .from(vehicles)
         .where(filter)
-        .orderBy(asc(vehicles.registrationNumber))
+        .orderBy(asc(vehicles.registrationNumber), asc(vehicles.id))
         .limit(input.pageSize)
         .offset(offset),
       this.db.select({ value: count() }).from(vehicles).where(filter),

@@ -29,7 +29,7 @@ describe('questionnaire validation', () => {
       'Question stable keys must be unique',
     );
     expect(() =>
-      validateQuestionnaireQuestions([{ ...starQuestion, scoreMin: 5, scoreMax: 1 }], false),
+      validateQuestionnaireQuestions([{ ...starQuestion, scoreMin: 5, scoreMax: 1 }], true),
     ).toThrow('overall requires valid score bounds');
   });
 
@@ -45,8 +45,77 @@ describe('questionnaire validation', () => {
         { valueKey: 'no', label: 'No' },
       ],
     };
-    expect(() => validateQuestionnaireQuestions([choice], false)).toThrow(
+    expect(() => validateQuestionnaireQuestions([choice], true)).toThrow(
       'recommend requires a score for every option',
+    );
+  });
+
+  it('allows incomplete option configuration while editing a draft', () => {
+    const choice: QuestionInput = {
+      ...starQuestion,
+      stableKey: 'highlights',
+      questionType: 'MULTIPLE_CHOICE',
+      scoreMin: null,
+      scoreMax: null,
+      options: [{ valueKey: 'safe', label: 'Safe' }],
+    };
+
+    expect(() => validateQuestionnaireQuestions([choice], false)).not.toThrow();
+    expect(() =>
+      validateQuestionnaireQuestions(
+        [
+          {
+            stableKey: 'highlights_without_options',
+            prompt: choice.prompt,
+            questionType: choice.questionType,
+            category: choice.category,
+            isRequired: choice.isRequired,
+            contributesToScore: choice.contributesToScore,
+            scoreMin: null,
+            scoreMax: null,
+          },
+        ],
+        false,
+      ),
+    ).not.toThrow();
+    expect(() => validateQuestionnaireQuestions([choice], true)).toThrow(
+      'highlights requires at least two options',
+    );
+  });
+
+  it('accepts optional scores when a choice question does not contribute to scoring', () => {
+    const choice: QuestionInput = {
+      ...starQuestion,
+      stableKey: 'ride_highlight',
+      questionType: 'SINGLE_CHOICE',
+      contributesToScore: false,
+      scoreMin: null,
+      scoreMax: null,
+      options: [
+        { valueKey: 'safety', label: 'Safety', scoreValue: 5 },
+        { valueKey: 'comfort', label: 'Comfort' },
+      ],
+    };
+
+    expect(() => validateQuestionnaireQuestions([choice], true)).not.toThrow();
+  });
+
+  it('defers incomplete score configuration until publication', () => {
+    const choice: QuestionInput = {
+      ...starQuestion,
+      stableKey: 'service_quality',
+      questionType: 'SINGLE_CHOICE',
+      scoreMin: null,
+      scoreMax: null,
+      options: [
+        { valueKey: 'great', label: 'Great', scoreValue: 5 },
+        { valueKey: 'poor', label: 'Poor' },
+      ],
+    };
+
+    expect(() => validateQuestionnaireQuestions([choice], false)).not.toThrow();
+    expect(() => validateQuestionnaireQuestions([choice], true)).toThrow(
+      'service_quality requires a score for every option',
     );
   });
 });

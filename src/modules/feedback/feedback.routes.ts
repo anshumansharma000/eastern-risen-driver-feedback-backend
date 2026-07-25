@@ -47,6 +47,11 @@ export const feedbackRoutes: FastifyPluginAsyncTypebox<FeedbackRouteOptions> = a
             effectiveAt: context.consent.effectiveAt.toISOString(),
             retiredAt: context.consent.retiredAt?.toISOString() ?? null,
           },
+          completion: {
+            agencyName: context.settings.agencyName,
+            timezone: context.settings.timezone,
+            thankYouMessage: context.settings.defaultThankYouMessage,
+          },
         },
       };
     },

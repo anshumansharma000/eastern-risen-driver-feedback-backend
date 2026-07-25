@@ -43,6 +43,34 @@
       "when": 1784663645678,
       "tag": "0005_loud_yellow_claw",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1784966457403,
+      "tag": "0006_sharp_sabretooth",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1784967831055,
+      "tag": "0007_fresh_gambit",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1784967866829,
+      "tag": "0008_smooth_redwing",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1784984647939,
+      "tag": "0009_youthful_tigra",
+      "breakpoints": true
     }
   ]
 }

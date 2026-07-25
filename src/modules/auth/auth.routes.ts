@@ -6,25 +6,16 @@ import {
   driverLoginBodySchema,
   loginResponseSchema,
 } from './auth.schemas.js';
-import type { AuthGuards } from './auth.guard.js';
+import { sessionCookieOptions, type AuthGuards } from './auth.guard.js';
 
 export interface AuthRouteOptions {
   readonly authService: AuthService;
   readonly guards: AuthGuards;
   readonly cookieName: string;
   readonly secureCookie: boolean;
-  readonly cookieMaxAgeSeconds: number;
 }
 
 export const authRoutes: FastifyPluginAsyncTypebox<AuthRouteOptions> = async (app, options) => {
-  const cookieOptions = {
-    path: '/',
-    httpOnly: true,
-    sameSite: 'lax' as const,
-    secure: options.secureCookie,
-    maxAge: options.cookieMaxAgeSeconds,
-  };
-
   app.post(
     '/admin/login',
     {
@@ -41,7 +32,11 @@ export const authRoutes: FastifyPluginAsyncTypebox<AuthRouteOptions> = async (ap
         request.body.email,
         request.body.password,
       );
-      reply.setCookie(options.cookieName, session.token, cookieOptions);
+      reply.setCookie(
+        options.cookieName,
+        session.token,
+        sessionCookieOptions(options.secureCookie, session.expiresAt),
+      );
       return { data: { user: session.principal, expiresAt: session.expiresAt.toISOString() } };
     },
   );
@@ -62,7 +57,11 @@ export const authRoutes: FastifyPluginAsyncTypebox<AuthRouteOptions> = async (ap
         request.body.driverCode,
         request.body.password,
       );
-      reply.setCookie(options.cookieName, session.token, cookieOptions);
+      reply.setCookie(
+        options.cookieName,
+        session.token,
+        sessionCookieOptions(options.secureCookie, session.expiresAt),
+      );
       return { data: { user: session.principal, expiresAt: session.expiresAt.toISOString() } };
     },
   );

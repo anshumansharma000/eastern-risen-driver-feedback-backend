@@ -1,7 +1,8 @@
 import { Type } from 'typebox';
+import { paginationQuerySchema } from '../../shared/http/response.schemas.js';
 import { idParamsSchema } from '../vendors/vendor.schemas.js';
 
-export { idParamsSchema };
+export { idParamsSchema, paginationQuerySchema };
 
 export const questionnaireVersionParamsSchema = Type.Object({
   id: Type.String({ format: 'uuid' }),
@@ -53,7 +54,7 @@ export const questionInputSchema = Type.Object(
     contributesToScore: Type.Boolean(),
     scoreMin: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
     scoreMax: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
-    options: Type.Array(optionInputSchema, { maxItems: 100 }),
+    options: Type.Optional(Type.Array(optionInputSchema, { maxItems: 100 })),
   },
   { additionalProperties: false },
 );

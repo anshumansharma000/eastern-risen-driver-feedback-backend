@@ -127,4 +127,23 @@ describe('application infrastructure', () => {
     expect(response.headers['access-control-allow-origin']).toBe('http://localhost:3001');
     expect(response.headers['access-control-allow-credentials']).toBe('true');
   });
+
+  it('allows PUT requests from the configured frontend during CORS preflight', async () => {
+    app = await buildApp({ exposeDocs: false, allowedOrigins: ['http://localhost:3000'] });
+
+    const response = await app.inject({
+      method: 'OPTIONS',
+      url: '/api/v1/admin/questionnaires/questionnaire-id/versions/version-id/questions',
+      headers: {
+        origin: 'http://localhost:3000',
+        'access-control-request-method': 'PUT',
+        'access-control-request-headers': 'content-type',
+      },
+    });
+
+    expect(response.statusCode).toBe(204);
+    expect(response.headers['access-control-allow-origin']).toBe('http://localhost:3000');
+    expect(response.headers['access-control-allow-methods']?.split(', ')).toContain('PUT');
+    expect(response.headers['access-control-allow-headers']).toBe('content-type');
+  });
 });

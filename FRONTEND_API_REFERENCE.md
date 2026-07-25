@@ -3,7 +3,7 @@
 **Service:** Eastern Risen Driver Feedback API  
 **Contract version:** `0.1.0`  
 **Reference status:** Derived from implemented backend routes and TypeBox schemas  
-**Last verified:** 2026-07-22  
+**Last verified:** 2026-07-25
 **API prefix:** `/api/v1`  
 **Local backend:** `http://localhost:3000`
 
@@ -91,7 +91,7 @@ interface PaginatedResponse<T> {
 }
 ```
 
-Some small collections, notably questionnaires and versions, return `{ data: T[] }` without pagination. HTTP `204` has no response body.
+All list endpoints use this pagination envelope. HTTP `204` has no response body.
 
 ### Error envelope
 
@@ -114,7 +114,8 @@ Every response includes the same correlation identifier in the `x-request-id` he
 
 - Domain identifiers are UUID strings.
 - API timestamps are ISO 8601 date-time strings.
-- Render timestamps in `Asia/Kolkata` until agency settings make the display timezone configurable.
+- Render timestamps using the timezone returned by agency settings or endpoint
+  metadata; the initialized default is `Asia/Kolkata`.
 - Do not parse identifiers as numbers.
 
 ## 3. Authentication and authorization
@@ -180,6 +181,73 @@ interface LoginResponse {
 - `AUTHENTICATION_REQUIRED`: clear private in-memory/cache state and redirect to the appropriate sign-in screen.
 - `ADMIN_ACCESS_REQUIRED` or `DRIVER_ACCESS_REQUIRED`: show a safe forbidden state or redirect to the principal's own home.
 - Do not infer authorization only from hidden navigation; the server guard remains authoritative.
+
+### Self-service profiles
+
+| Method | Path | Auth | Success |
+| --- | --- | --- | --- |
+| `GET` | `/api/v1/admin/profile` | Admin | `200` |
+| `PATCH` | `/api/v1/admin/profile` | Admin | `200` |
+| `POST` | `/api/v1/admin/profile/change-password` | Admin | `204` |
+| `GET` | `/api/v1/driver/profile` | Driver | `200` |
+| `PATCH` | `/api/v1/driver/profile` | Driver | `200` |
+| `POST` | `/api/v1/driver/profile/change-password` | Driver | `204` |
+
+```ts
+interface AdminProfile {
+  accountId: string;
+  role: 'ADMIN';
+  displayName: string;
+  email: string;
+  status: LifecycleStatus;
+  passwordChangedAt: string;
+  lastLoginAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface DriverProfile extends Omit<AdminProfile, 'role'> {
+  role: 'DRIVER';
+  driverId: string;
+  driverCode: string;
+  phone: string | null;
+  sourceType: DriverSource;
+  vendorId: string | null;
+  vendorName: string | null;
+  assignmentEnabled: boolean;
+  shiftStartTime: string | null;
+  shiftEndTime: string | null;
+  timeZone: string;
+  maxDailyDutyMinutes: number;
+}
+
+type UpdateAdminProfileRequest = Partial<{
+  displayName: string;
+  email: string;
+}>; // at least one property
+
+type UpdateDriverProfileRequest = Partial<{
+  displayName: string;
+  email: string;
+  phone: string | null;
+}>; // at least one property
+
+interface ChangePasswordRequest {
+  currentPassword: string; // 1–128
+  newPassword: string; // 12–128
+}
+```
+
+Driver employment and assignment fields in `DriverProfile` are read-only.
+Source, vendor, status, driver code, assignment status, shift configuration,
+timezone, and duty limit remain admin-managed.
+
+Successful password changes clear the response cookie and revoke every session,
+including the request's current session. Parse HTTP 204 without JSON, clear
+private caches, and redirect to the role-specific login page.
+
+Relevant errors: `PROFILE_NOT_FOUND`, `ACCOUNT_EMAIL_ALREADY_EXISTS`,
+`CURRENT_PASSWORD_INVALID`, and `PASSWORD_REUSE_NOT_ALLOWED`.
 
 ## 4. Shared enums and resource types
 
@@ -275,11 +343,21 @@ All routes require an admin session.
 | Method | Path | Success | Request |
 | --- | --- | --- | --- |
 | `GET` | `/api/v1/admin/drivers` | `200` paginated | Query filters |
+| `GET` | `/api/v1/admin/drivers/:id` | `200` resource | — |
 | `POST` | `/api/v1/admin/drivers` | `201` resource | Create body |
 | `PATCH` | `/api/v1/admin/drivers/:id` | `200` resource | Partial update |
 | `PATCH` | `/api/v1/admin/drivers/:id/status` | `200` resource | Status body |
+| `POST` | `/api/v1/admin/drivers/:id/password-reset` | `204` | `{ newPassword }` |
+| `GET` | `/api/v1/admin/drivers/:id/leaves` | `200` paginated | Pagination query |
+| `POST` | `/api/v1/admin/drivers/:id/leaves` | `201` resource | Leave body |
+| `DELETE` | `/api/v1/admin/drivers/:id/leaves/:leaveId` | `204` | — |
 
-There is currently no `GET /admin/drivers/:id` and no implemented admin password-reset endpoint.
+The password-reset request body is
+`{ newPassword: string }`, where `newPassword` is 12–128 characters. The API
+hashes it immediately, revokes every active session for the driver, records an
+audit event without including the password, and returns an empty HTTP 204
+response. Archived or missing drivers return `DRIVER_NOT_FOUND`. There is no
+public forgot-password or email-reset endpoint.
 
 ```ts
 interface Driver {
@@ -292,6 +370,11 @@ interface Driver {
   sourceType: DriverSource;
   vendorId: string | null;
   vendorName: string | null;
+  assignmentEnabled: boolean;
+  shiftStartTime: string | null;
+  shiftEndTime: string | null;
+  timeZone: string;
+  maxDailyDutyMinutes: number;
   status: LifecycleStatus;
   createdAt: string;
   updatedAt: string;
@@ -306,6 +389,11 @@ interface CreateDriverRequest {
   phone?: string; // max 32
   sourceType: DriverSource;
   vendorId?: string | null;
+  assignmentEnabled?: boolean; // defaults to true
+  shiftStartTime?: string | null; // HH:mm; set both shift fields or neither
+  shiftEndTime?: string | null; // HH:mm; overnight shifts are supported
+  timeZone?: string; // IANA name; defaults to Asia/Kolkata
+  maxDailyDutyMinutes?: number; // 1–1440; defaults to 720
 }
 
 type UpdateDriverRequest = Partial<{
@@ -315,8 +403,18 @@ type UpdateDriverRequest = Partial<{
   phone: string | null;
   sourceType: DriverSource;
   vendorId: string | null;
+  assignmentEnabled: boolean;
+  shiftStartTime: string | null;
+  shiftEndTime: string | null;
+  timeZone: string;
+  maxDailyDutyMinutes: number;
 }>; // at least one property; password is not editable here
 ```
+
+Driver leave is managed through `GET|POST /api/v1/admin/drivers/:id/leaves` and
+`DELETE /api/v1/admin/drivers/:id/leaves/:leaveId`. A leave-create body contains
+`startsAt`, `endsAt`, and an optional `reason`. The leave list accepts `page` and
+`pageSize`.
 
 List query and status body match vendors.
 
@@ -375,6 +473,7 @@ interface Trip {
   pickupLocation: string;
   destination: string;
   scheduledAt: string;
+  scheduledEndAt: string;
   vehicle: {
     id: string;
     registrationNumber: string;
@@ -402,6 +501,7 @@ interface TripFields {
   pickupLocation: string; // 1–500
   destination: string; // 1–500
   scheduledAt: string; // ISO date-time
+  scheduledEndAt: string; // ISO date-time, strictly after scheduledAt
   vehicleId: string;
 }
 ```
@@ -426,7 +526,12 @@ Admin list query:
 - `page?: number` (default 1)
 - `pageSize?: number` (default 25, max 100)
 
-Only `READY` trips are editable. Only active vehicles and active drivers may be selected; an outsourced driver also requires an active vendor.
+Only `READY` trips are editable. Assignment also requires a future schedule,
+different pickup and destination, a unique booking reference, an active and
+assignment-enabled driver, an active vehicle, no driver/vehicle overlap, no
+overlapping driver leave, a schedule contained by the configured shift, and
+enough remaining duty minutes for the driver’s local calendar day. An
+outsourced driver also requires an active vendor.
 
 ### Driver trip endpoints
 
@@ -454,7 +559,16 @@ interface HandoffResponse {
 
 Starting feedback is idempotent while the trip is already `FEEDBACK_STARTED`; the backend can return the existing valid handoff. The token must be handed into the passenger flow without placing it in the URL.
 
-Relevant errors: `TRIP_NOT_FOUND`, `TRIP_NOT_EDITABLE`, `TRIP_CANNOT_START_FEEDBACK`, `ACTIVE_DRIVER_NOT_FOUND`, `ACTIVE_VEHICLE_NOT_FOUND`, `FEEDBACK_HANDOFF_UNAVAILABLE`, `ACTIVE_QUESTIONNAIRE_NOT_FOUND`, `ACTIVE_CONSENT_NOT_FOUND`.
+Relevant assignment errors: `TRIP_CANNOT_BE_SCHEDULED_IN_PAST`,
+`INVALID_TRIP_SCHEDULE`, `TRIP_LOCATIONS_MUST_DIFFER`,
+`TRIP_BOOKING_REFERENCE_ALREADY_EXISTS`, `DRIVER_NOT_AVAILABLE_FOR_ASSIGNMENT`,
+`DRIVER_SCHEDULE_CONFLICT`, `VEHICLE_SCHEDULE_CONFLICT`, `DRIVER_ON_LEAVE`,
+`TRIP_OUTSIDE_DRIVER_SHIFT`, and `DRIVER_DAILY_DUTY_LIMIT_EXCEEDED`.
+
+Other relevant errors: `TRIP_NOT_FOUND`, `TRIP_NOT_EDITABLE`,
+`TRIP_CANNOT_START_FEEDBACK`, `ACTIVE_DRIVER_NOT_FOUND`,
+`ACTIVE_VEHICLE_NOT_FOUND`, `FEEDBACK_HANDOFF_UNAVAILABLE`,
+`ACTIVE_QUESTIONNAIRE_NOT_FOUND`, and `ACTIVE_CONSENT_NOT_FOUND`.
 
 ## 9. Admin questionnaires and consent
 
@@ -464,11 +578,11 @@ All routes require an admin session.
 
 | Method | Path | Success | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/api/v1/admin/questionnaires` | `200` non-paginated | List questionnaires |
+| `GET` | `/api/v1/admin/questionnaires` | `200` paginated | List questionnaires |
 | `POST` | `/api/v1/admin/questionnaires` | `201` | Create questionnaire and first draft |
 | `PATCH` | `/api/v1/admin/questionnaires/:id` | `200` | Rename questionnaire |
 | `POST` | `/api/v1/admin/questionnaires/:id/archive` | `200` | Archive questionnaire |
-| `GET` | `/api/v1/admin/questionnaires/:id/versions` | `200` non-paginated | List versions |
+| `GET` | `/api/v1/admin/questionnaires/:id/versions` | `200` paginated | List versions |
 | `POST` | `/api/v1/admin/questionnaires/:id/versions` | `201` | Clone latest version into a draft |
 | `GET` | `/api/v1/admin/questionnaires/:id/versions/:versionId` | `200` | Get version with questions |
 | `PUT` | `/api/v1/admin/questionnaires/:id/versions/:versionId/questions` | `200` | Replace/reorder all draft questions |
@@ -476,6 +590,10 @@ All routes require an admin session.
 | `POST` | `/api/v1/admin/questionnaires/:id/versions/:versionId/archive` | `200` | Archive a draft |
 | `GET` | `/api/v1/admin/consent-versions/active` | `200` | Get active consent notice |
 | `POST` | `/api/v1/admin/consent-versions` | `201` | Activate new immutable consent notice |
+
+Both questionnaire list endpoints accept `page` (default `1`) and `pageSize`
+(default `25`, maximum `100`) and return the standard paginated collection
+envelope.
 
 ### Questionnaire types
 
@@ -553,7 +671,7 @@ interface QuestionInput {
   contributesToScore: boolean;
   scoreMin?: number | null;
   scoreMax?: number | null;
-  options: OptionInput[]; // max 100
+  options?: OptionInput[]; // max 100; omitted values are stored as []
 }
 
 interface ReplaceQuestionsRequest {
@@ -567,10 +685,14 @@ Question validation rules:
 
 - Stable question keys must be unique within the version.
 - Option keys must be unique within a question.
-- `EMOJI_RATING`, `YES_NO`, `SINGLE_CHOICE`, and `MULTIPLE_CHOICE` require at least two options.
+- Drafts may be saved with incomplete option and score configuration so the editor can persist
+  incremental changes.
+- On publish, `EMOJI_RATING`, `YES_NO`, `SINGLE_CHOICE`, and `MULTIPLE_CHOICE` require at least
+  two options.
 - `STAR_RATING` and `TEXT` do not allow options.
 - A scored star question needs valid `scoreMin` and `scoreMax` bounds.
-- A scored option question requires a numeric `scoreValue` for every option.
+- On publish, a scored option question requires a numeric `scoreValue` for every option. Scores
+  remain optional when `contributesToScore` is `false`.
 - An active publish must contain at least one active question.
 - `TEXT` is stored as not contributing to score.
 
@@ -715,7 +837,239 @@ New acceptance returns `201` and `replayed: false`. Repeating the same accepted 
 
 Relevant errors: `FEEDBACK_HANDOFF_INVALID`, `CLIENT_SUBMISSION_ID_CONFLICT`, `TRIP_FEEDBACK_ALREADY_SUBMITTED`, `QUESTIONNAIRE_VERSION_INVALID`, `BOOKING_REFERENCE_MISMATCH`, `QUESTIONNAIRE_SNAPSHOT_INVALID`, `FEEDBACK_ANSWERS_INVALID`, `TRIP_FEEDBACK_STATE_CONFLICT`, `TRIP_NOT_FOUND`.
 
-## 11. Error handling reference
+The passenger context also returns completion copy:
+
+```ts
+interface PassengerCompletionContext {
+  agencyName: string;
+  timezone: string;
+  thankYouMessage: string;
+}
+```
+
+Render this server-provided thank-you message on the safe completion/hand-back
+screen. Do not hard-code the agency timezone or completion copy.
+
+## 11. Agency settings
+
+Both routes require an admin session.
+
+| Method | Path | Success | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/v1/admin/settings` | `200` | Read the singleton agency settings |
+| `PATCH` | `/api/v1/admin/settings` | `200` | Partially update and audit settings |
+
+```ts
+interface AgencySettings {
+  id: string;
+  agencyName: string;
+  timezone: string; // validated IANA timezone
+  defaultThankYouMessage: string;
+  negativeFeedbackThreshold: number | null; // inclusive 1–5
+  createdAt: string;
+  updatedAt: string;
+}
+
+type UpdateAgencySettingsRequest = Partial<{
+  agencyName: string; // 1–200
+  timezone: string; // 1–100, valid IANA name
+  defaultThankYouMessage: string; // 1–1000
+  negativeFeedbackThreshold: number | null; // 1–5 or null to disable classification
+}>; // at least one property
+```
+
+When the threshold is `null`, show negative-feedback metrics as “Not
+configured”; do not render `0`. Settings changes invalidate passenger context,
+admin analytics, feedback-list, and any cached timezone-derived labels.
+
+Relevant error: `TIMEZONE_INVALID`.
+
+## 12. Admin feedback review
+
+All routes require an admin session.
+
+| Method | Path | Success | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/v1/admin/feedback` | `200` paginated | Filter feedback summaries |
+| `GET` | `/api/v1/admin/feedback/:id` | `200` | Inspect immutable answers, authorized contact data, and review history |
+| `PATCH` | `/api/v1/admin/feedback/:id/review-state` | `200` | Flag, unflag, or archive |
+
+List query:
+
+```ts
+interface AdminFeedbackListQuery {
+  page?: number; // default 1
+  pageSize?: number; // default 25, max 100
+  month?: string; // YYYY-MM in agency timezone, based on submittedAt
+  driverId?: string;
+  driverSource?: 'AGENCY' | 'OUTSOURCED';
+  vendorId?: string;
+  reviewState?: 'NORMAL' | 'FLAGGED' | 'ARCHIVED';
+  submissionMode?: 'ONLINE' | 'OFFLINE_SYNC';
+  category?: QuestionCategory;
+  minimumScore?: number; // 1–5, submission-wide scored-answer average
+  maximumScore?: number; // 1–5
+  negativeOnly?: boolean;
+}
+```
+
+List responses add:
+
+```ts
+interface FeedbackListMeta {
+  timezone: string;
+  dateBasis: 'SUBMITTED_AT';
+}
+
+interface AdminFeedbackSummary {
+  id: string;
+  tripId: string;
+  bookingReference: string;
+  respondentName: string;
+  driver: {
+    id: string;
+    displayName: string;
+    sourceType: 'AGENCY' | 'OUTSOURCED';
+    vendorId: string | null;
+    vendorName: string | null;
+  };
+  submittedAt: string;
+  receivedAt: string;
+  submissionMode: 'ONLINE' | 'OFFLINE_SYNC';
+  reviewState: 'NORMAL' | 'FLAGGED' | 'ARCHIVED';
+  overallScore: number | null;
+}
+```
+
+The detail response extends the summary:
+
+```ts
+interface AdminFeedbackDetail extends AdminFeedbackSummary {
+  respondent: {
+    name: string;
+    phone: string;
+    email: string;
+    bookingReference: string;
+  };
+  trip: {
+    pickupLocation: string;
+    destination: string;
+    scheduledAt: string;
+    scheduledEndAt: string;
+    vehicle: { registrationNumber: string; displayName: string };
+  };
+  consentVersionId: string;
+  consentedAt: string;
+  questionnaireVersionId: string;
+  answers: Array<{
+    id: string;
+    questionId: string;
+    stableKey: string;
+    prompt: string;
+    questionType: QuestionType;
+    category: QuestionCategory;
+    displayOrder: number;
+    value: unknown;
+    numericScore: number | null;
+  }>;
+  reviewHistory: Array<{
+    id: string;
+    action: 'FLAG' | 'UNFLAG' | 'ARCHIVE';
+    reason: string | null;
+    performedBy: { accountId: string; displayName: string };
+    createdAt: string;
+  }>;
+}
+```
+
+Review mutation:
+
+```ts
+interface UpdateFeedbackReviewRequest {
+  state: 'NORMAL' | 'FLAGGED' | 'ARCHIVED';
+  reason?: string; // 1–1000; required when archiving
+}
+```
+
+`NORMAL` is valid only when unflagging a currently flagged record. Archived
+feedback cannot currently be restored. Submitted answers and respondent fields
+are never editable. Keep decrypted phone/email out of list caches, logs,
+analytics, and client telemetry.
+
+Relevant errors: `FEEDBACK_NOT_FOUND`, `FEEDBACK_ARCHIVE_REASON_REQUIRED`,
+`FEEDBACK_REVIEW_TRANSITION_INVALID`, `FEEDBACK_RESTORE_NOT_SUPPORTED`, and
+`NEGATIVE_FEEDBACK_THRESHOLD_REQUIRED`.
+
+## 13. Driver performance
+
+`GET /api/v1/driver/performance` requires a driver session. Optional query
+`month=YYYY-MM` uses `submittedAt` in the configured agency timezone.
+
+```ts
+interface ScoreSummary {
+  averageScore: number | null;
+  responseCount: number;
+  answerCount: number;
+}
+
+interface DriverPerformance {
+  driverId: string;
+  overall: ScoreSummary;
+  categories: Array<ScoreSummary & { category: QuestionCategory }>;
+  monthlyTrend: Array<ScoreSummary & { month: string }>;
+  meta: {
+    timezone: string;
+    dateBasis: 'SUBMITTED_AT';
+    month: string | null;
+  };
+}
+```
+
+The endpoint never returns passenger data, comments, individual responses, or
+feedback identifiers. A null average with zero counts is the correct empty
+state. Archived feedback is excluded.
+
+## 14. Admin analytics
+
+`GET /api/v1/admin/analytics` requires an admin session.
+
+Query fields are `month?`, `driverId?`, `driverSource?`, `vendorId?`, and
+`category?`, using the same values and month semantics as the feedback list.
+
+```ts
+interface AdminAnalytics {
+  overall: ScoreSummary;
+  negativeFeedbackCount: number | null;
+  negativeFeedbackThreshold: number | null;
+  categories: Array<ScoreSummary & { category: QuestionCategory }>;
+  drivers: Array<
+    ScoreSummary & {
+      driver: {
+        id: string;
+        displayName: string;
+        sourceType: 'AGENCY' | 'OUTSOURCED';
+        vendorId: string | null;
+        vendorName: string | null;
+      };
+    }
+  >;
+  sources: Array<ScoreSummary & { sourceType: 'AGENCY' | 'OUTSOURCED' }>;
+  vendors: Array<ScoreSummary & { vendorId: string; vendorName: string }>;
+  monthlyTrend: Array<ScoreSummary & { month: string }>;
+  meta: {
+    timezone: string;
+    dateBasis: 'SUBMITTED_AT';
+    month: string | null;
+  };
+}
+```
+
+All averages are ordinary arithmetic means over non-null scored answers.
+`responseCount` counts distinct submissions while `answerCount` counts
+contributing scored answers. Archived feedback is excluded from every current
+aggregate. `negativeFeedbackCount` is `null` when no threshold is configured.
+
+## 15. Error handling reference
 
 ### Global/system errors
 
@@ -773,7 +1127,7 @@ Safe automatic retries generally include loss of connectivity, DNS/transport fai
 
 Do not automatically retry unchanged `400`, `401`, `403`, `404`, `409`, `413`, or `415` responses. Handle `429` using backoff and any future `Retry-After` header. For passenger feedback, domain errors must never be converted into offline queue success.
 
-## 12. Frontend client requirements
+## 16. Frontend client requirements
 
 The typed client layer should:
 
@@ -790,24 +1144,19 @@ The typed client layer should:
 
 Prefer types generated from OpenAPI. If handwritten types are temporarily necessary, isolate them in one contract module and add contract tests so drift is detected.
 
-## 13. Known API gaps
+## 17. Known API gaps
 
 The product specification describes the following frontend capabilities, but the routes are not implemented as of the verification date:
 
-- driver self-service password reset and admin-initiated driver reset;
-- driver aggregate/performance endpoints and month filters;
-- admin dashboard analytics and negative-feedback metrics;
-- admin feedback list/detail, flag, archive, and review history;
 - rewards, prize inventory, wheel attempt/outcome, and reward email state;
 - reports and CSV/Excel/PDF exports;
-- agency settings and configurable thank-you message;
 - pending synchronization server status;
-- dedicated driver and vendor detail reads;
+- dedicated vendor detail reads;
 - restore operations for archived records.
 
 The frontend must not invent production endpoints or show false mutation success. Use explicit feature gating or documented placeholders until a backend contract exists.
 
-## 14. Contract maintenance checklist
+## 18. Contract maintenance checklist
 
 When backend routes or schemas change:
 
@@ -818,4 +1167,3 @@ When backend routes or schemas change:
 5. add or update API contract tests;
 6. update [FRONTEND_REFERENCE.md](FRONTEND_REFERENCE.md) if UI states or flows change;
 7. update [PRODUCT.md](PRODUCT.md) for material behavior, permissions, privacy, analytics, offline, export, or reward changes.
-

@@ -1,5 +1,14 @@
 import { sql } from 'drizzle-orm';
-import { check, index, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import {
+  check,
+  index,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from 'drizzle-orm/pg-core';
 import { authAccounts } from './accounts.js';
 import { drivers } from './drivers.js';
 import { driverSourceType, tripCreationSource, tripStatus } from './enums.js';
@@ -20,6 +29,7 @@ export const trips = pgTable(
     pickupLocation: text('pickup_location').notNull(),
     destination: text('destination').notNull(),
     scheduledAt: timestamp('scheduled_at', { withTimezone: true }).notNull(),
+    scheduledEndAt: timestamp('scheduled_end_at', { withTimezone: true }).notNull(),
     vehicleId: uuid('vehicle_id')
       .notNull()
       .references(() => vehicles.id, { onDelete: 'restrict' }),
@@ -44,8 +54,10 @@ export const trips = pgTable(
   },
   (table) => [
     index('trips_booking_reference_idx').on(table.bookingReference),
+    uniqueIndex('trips_booking_reference_unique').on(sql`lower(${table.bookingReference})`),
     index('trips_driver_status_scheduled_idx').on(table.driverId, table.status, table.scheduledAt),
     index('trips_status_scheduled_idx').on(table.status, table.scheduledAt),
+    check('trips_schedule_range_check', sql`${table.scheduledEndAt} > ${table.scheduledAt}`),
     check(
       'trips_vendor_snapshot_check',
       sql`(${table.driverSourceSnapshot} = 'OUTSOURCED'

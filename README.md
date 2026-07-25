@@ -62,8 +62,12 @@ The password is hashed with Argon2id before insertion and is never printed.
 - `PATCH /api/v1/admin/vendors/:id`
 - `PATCH /api/v1/admin/vendors/:id/status`
 - `GET|POST /api/v1/admin/drivers`
+- `GET /api/v1/admin/drivers/:id`
 - `PATCH /api/v1/admin/drivers/:id`
 - `PATCH /api/v1/admin/drivers/:id/status`
+- `POST /api/v1/admin/drivers/:id/password-reset`
+- `GET|POST /api/v1/admin/drivers/:id/leaves`
+- `DELETE /api/v1/admin/drivers/:id/leaves/:leaveId`
 - `GET|POST /api/v1/admin/vehicles`
 - `GET|PATCH /api/v1/admin/vehicles/:id`
 - `PATCH /api/v1/admin/vehicles/:id/status`
@@ -85,10 +89,38 @@ The password is hashed with Argon2id before insertion and is never printed.
 - `POST /api/v1/admin/consent-versions`
 - `GET /api/v1/passenger/feedback/context`
 - `POST /api/v1/passenger/feedback/submissions`
+- `GET|PATCH /api/v1/admin/settings`
+- `GET /api/v1/admin/feedback`
+- `GET /api/v1/admin/feedback/:id`
+- `PATCH /api/v1/admin/feedback/:id/review-state`
+- `GET /api/v1/admin/analytics`
+- `GET /api/v1/driver/performance`
+- `GET|PATCH /api/v1/admin/profile`
+- `POST /api/v1/admin/profile/change-password`
+- `GET|PATCH /api/v1/driver/profile`
+- `POST /api/v1/driver/profile/change-password`
 
 Authentication uses an opaque, database-backed session cookie. The cookie is
 `HttpOnly`, uses `SameSite=Lax`, and is marked `Secure` in production. The raw
 session token is never stored in PostgreSQL.
+
+Sessions have a 72-hour inactivity timeout and a 30-day absolute lifetime by
+default. An active session rotates its token every 24 hours and renews the
+inactivity deadline, while the prior token remains valid for 60 seconds so
+concurrent browser requests are not interrupted. Configure these limits with
+`SESSION_IDLE_TTL_HOURS`, `SESSION_ABSOLUTE_TTL_DAYS`,
+`SESSION_ROTATION_INTERVAL_HOURS`, and `SESSION_ROTATION_GRACE_SECONDS`.
+
+Administrators and drivers can read and update their own basic profiles.
+Drivers may self-edit only display name, email, and phone; operational source,
+vendor, status, assignment, shift, and duty-limit fields remain
+administrator-controlled. Self-service password changes require the current
+password and revoke every session for that account.
+
+Administrators can directly set a new password for a non-archived driver.
+The password is hashed immediately, never returned or written to audit
+metadata, and every active session for that driver is revoked. There is no
+public forgot-password or email delivery flow.
 
 Set `FRONTEND_ORIGINS` to a comma-separated allowlist of exact frontend origins.
 Credentialed CORS responses are emitted only for that allowlist, and browser
@@ -114,6 +146,10 @@ assigned trips, enter a trip for themselves, and transition a ready trip to
 Each trip stores immutable snapshots of the selected vehicle, driver identity,
 driver source, and outsourced vendor. A trip can be created only with an active
 vehicle and active driver; outsourced drivers also require an active vendor.
+Assignments reject past or invalid time ranges, duplicate booking references,
+same pickup/destination values, driver or vehicle overlaps, unavailable or
+on-leave drivers, trips outside configured shifts, and trips that exceed a
+driver's daily duty-minute limit.
 
 Questionnaires use editable draft versions and immutable published versions.
 Replacing a draft's ordered question array supports adding, editing, reordering,
@@ -139,6 +175,22 @@ storage. Production requires a base64-encoded 32-byte
 `DATA_ENCRYPTION_KEY_BASE64` deployment secret. Back up and rotate this key only
 through an explicit data-migration procedure. `FEEDBACK_HANDOFF_TTL_HOURS`
 controls the passenger token lifetime and defaults to seven days.
+
+Agency settings control the agency name, IANA timezone, passenger thank-you
+message, and an optional negative-feedback threshold. Passenger context includes
+the completion copy needed by the hand-back screen. Calendar-month filters and
+analytics use `submittedAt` grouped in the configured agency timezone.
+
+Administrators can list and inspect immutable feedback, including decrypted
+passenger contact values only on the protected detail endpoint. Flag, unflag,
+and archive transitions append both review history and an audit event in the
+same transaction. Archiving requires a reason and cannot currently be reversed.
+
+Driver performance exposes only arithmetic aggregates and contributing counts;
+it never returns individual responses, comments, or passenger information.
+Admin analytics uses the same scoring rules and supports month, driver, source,
+vendor, and category filters. Archived feedback is excluded from all current
+aggregates.
 
 ## DigitalOcean Managed PostgreSQL
 

@@ -13,7 +13,10 @@ describe('loadConfig', () => {
       databaseConnectionTimeoutMs: 10_000,
       databaseStatementTimeoutMs: 30_000,
       sessionCookieName: 'id',
-      sessionTtlHours: 12,
+      sessionIdleTtlHours: 72,
+      sessionAbsoluteTtlDays: 30,
+      sessionRotationIntervalHours: 24,
+      sessionRotationGraceSeconds: 60,
       frontendOrigins: [],
       trustProxyHops: 0,
       requestTimeoutMs: 30_000,
@@ -38,6 +41,16 @@ describe('loadConfig', () => {
     expect(() =>
       loadConfig({ DATABASE_URL: 'postgresql://localhost/test', PORT: 'not-a-port' }),
     ).toThrow('PORT must be a positive integer');
+  });
+
+  it('requires token rotation before the inactivity deadline', () => {
+    expect(() =>
+      loadConfig({
+        DATABASE_URL: 'postgresql://localhost/test',
+        SESSION_IDLE_TTL_HOURS: '12',
+        SESSION_ROTATION_INTERVAL_HOURS: '12',
+      }),
+    ).toThrow('SESSION_ROTATION_INTERVAL_HOURS must be less than SESSION_IDLE_TTL_HOURS');
   });
 
   it('requires a 32-byte data-encryption key in production', () => {

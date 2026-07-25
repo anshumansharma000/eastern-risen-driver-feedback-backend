@@ -1,4 +1,4 @@
-import type { FastifyRequest, preHandlerAsyncHookHandler } from 'fastify';
+import type { FastifyReply, FastifyRequest, preHandlerAsyncHookHandler } from 'fastify';
 import { AppError } from '../../shared/errors/app-error.js';
 import type { AuthService } from './auth.service.js';
 import type { AuthPrincipal } from './auth.types.js';
@@ -15,17 +15,29 @@ export interface AuthGuards {
   readonly driver: preHandlerAsyncHookHandler;
 }
 
-export function createAuthGuards(authService: AuthService, cookieName: string): AuthGuards {
-  const resolve = async (request: FastifyRequest): Promise<void> => {
-    request.auth = await authService.resolveSession(request.cookies[cookieName]);
+export function createAuthGuards(
+  authService: AuthService,
+  cookieName: string,
+  secureCookie: boolean,
+): AuthGuards {
+  const resolve = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    const resolution = await authService.resolveSession(request.cookies[cookieName]);
+    request.auth = resolution.principal;
+    if (resolution.renewal) {
+      reply.setCookie(
+        cookieName,
+        resolution.renewal.token,
+        sessionCookieOptions(secureCookie, resolution.renewal.expiresAt),
+      );
+    }
   };
 
-  const authenticated: preHandlerAsyncHookHandler = async (request) => {
-    await resolve(request);
+  const authenticated: preHandlerAsyncHookHandler = async (request, reply) => {
+    await resolve(request, reply);
   };
 
-  const admin: preHandlerAsyncHookHandler = async (request) => {
-    await resolve(request);
+  const admin: preHandlerAsyncHookHandler = async (request, reply) => {
+    await resolve(request, reply);
     if (request.auth?.role !== 'ADMIN') {
       throw new AppError({
         code: 'ADMIN_ACCESS_REQUIRED',
@@ -35,8 +47,8 @@ export function createAuthGuards(authService: AuthService, cookieName: string): 
     }
   };
 
-  const driver: preHandlerAsyncHookHandler = async (request) => {
-    await resolve(request);
+  const driver: preHandlerAsyncHookHandler = async (request, reply) => {
+    await resolve(request, reply);
     if (request.auth?.role !== 'DRIVER' || !request.auth.driverId) {
       throw new AppError({
         code: 'DRIVER_ACCESS_REQUIRED',
@@ -47,4 +59,14 @@ export function createAuthGuards(authService: AuthService, cookieName: string): 
   };
 
   return { authenticated, admin, driver };
+}
+
+export function sessionCookieOptions(secure: boolean, expiresAt: Date) {
+  return {
+    path: '/',
+    httpOnly: true,
+    sameSite: 'lax' as const,
+    secure,
+    maxAge: Math.max(1, Math.ceil((expiresAt.getTime() - Date.now()) / 1000)),
+  };
 }

@@ -1,13 +1,26 @@
-import { and, eq, gt, isNull, lte, sql } from 'drizzle-orm';
+import { and, eq, gt, isNull, lte, or, sql } from 'drizzle-orm';
 import type { AppDatabase } from '../../database/client.js';
 import { authAccounts, authSessions, drivers } from '../../database/schema/index.js';
-import type { AuthAccount, AuthPrincipal } from './auth.types.js';
+import type { AuthAccount, ResolvedAuthSession } from './auth.types.js';
 
 export interface AuthRepository {
   findAdminByEmail(email: string): Promise<AuthAccount | null>;
   findDriverByCode(driverCode: string): Promise<AuthAccount | null>;
-  createSession(accountId: string, tokenHash: string, expiresAt: Date): Promise<void>;
-  findPrincipalBySessionHash(tokenHash: string, now: Date): Promise<AuthPrincipal | null>;
+  createSession(
+    accountId: string,
+    tokenHash: string,
+    expiresAt: Date,
+    absoluteExpiresAt: Date,
+  ): Promise<void>;
+  findSessionByTokenHash(tokenHash: string, now: Date): Promise<ResolvedAuthSession | null>;
+  rotateSession(
+    sessionId: string,
+    expectedTokenHash: string,
+    newTokenHash: string,
+    expiresAt: Date,
+    previousTokenValidUntil: Date,
+    now: Date,
+  ): Promise<boolean>;
   revokeSession(tokenHash: string, now: Date): Promise<void>;
   recordSuccessfulLogin(accountId: string, now: Date): Promise<void>;
 }
@@ -52,26 +65,45 @@ export class DrizzleAuthRepository implements AuthRepository {
     return account ?? null;
   }
 
-  async createSession(accountId: string, tokenHash: string, expiresAt: Date): Promise<void> {
-    await this.db.insert(authSessions).values({ accountId, tokenHash, expiresAt });
+  async createSession(
+    accountId: string,
+    tokenHash: string,
+    expiresAt: Date,
+    absoluteExpiresAt: Date,
+  ): Promise<void> {
+    await this.db
+      .insert(authSessions)
+      .values({ accountId, tokenHash, expiresAt, absoluteExpiresAt });
   }
 
-  async findPrincipalBySessionHash(tokenHash: string, now: Date): Promise<AuthPrincipal | null> {
+  async findSessionByTokenHash(tokenHash: string, now: Date): Promise<ResolvedAuthSession | null> {
     const [session] = await this.db
       .select({
+        id: authSessions.id,
         accountId: authAccounts.id,
         role: authAccounts.role,
         displayName: authAccounts.displayName,
         driverId: drivers.id,
+        tokenHash: authSessions.tokenHash,
+        expiresAt: authSessions.expiresAt,
+        absoluteExpiresAt: authSessions.absoluteExpiresAt,
+        rotatedAt: authSessions.rotatedAt,
       })
       .from(authSessions)
       .innerJoin(authAccounts, eq(authAccounts.id, authSessions.accountId))
       .leftJoin(drivers, eq(drivers.accountId, authAccounts.id))
       .where(
         and(
-          eq(authSessions.tokenHash, tokenHash),
+          or(
+            eq(authSessions.tokenHash, tokenHash),
+            and(
+              eq(authSessions.previousTokenHash, tokenHash),
+              gt(authSessions.previousTokenValidUntil, now),
+            ),
+          ),
           isNull(authSessions.revokedAt),
           gt(authSessions.expiresAt, now),
+          gt(authSessions.absoluteExpiresAt, now),
           eq(authAccounts.status, 'ACTIVE'),
           lte(authAccounts.passwordChangedAt, authSessions.createdAt),
         ),
@@ -83,16 +115,72 @@ export class DrizzleAuthRepository implements AuthRepository {
     await this.db
       .update(authSessions)
       .set({ lastSeenAt: now })
-      .where(eq(authSessions.tokenHash, tokenHash));
+      .where(eq(authSessions.id, session.id));
 
-    return session;
+    return {
+      id: session.id,
+      principal: {
+        accountId: session.accountId,
+        role: session.role,
+        displayName: session.displayName,
+        driverId: session.driverId,
+      },
+      tokenHash: session.tokenHash,
+      matchedCurrentToken: session.tokenHash === tokenHash,
+      expiresAt: session.expiresAt,
+      absoluteExpiresAt: session.absoluteExpiresAt,
+      rotatedAt: session.rotatedAt,
+    };
+  }
+
+  async rotateSession(
+    sessionId: string,
+    expectedTokenHash: string,
+    newTokenHash: string,
+    expiresAt: Date,
+    previousTokenValidUntil: Date,
+    now: Date,
+  ): Promise<boolean> {
+    const updated = await this.db
+      .update(authSessions)
+      .set({
+        tokenHash: newTokenHash,
+        previousTokenHash: expectedTokenHash,
+        previousTokenValidUntil,
+        expiresAt,
+        lastSeenAt: now,
+        rotatedAt: now,
+      })
+      .where(
+        and(
+          eq(authSessions.id, sessionId),
+          eq(authSessions.tokenHash, expectedTokenHash),
+          isNull(authSessions.revokedAt),
+          gt(authSessions.expiresAt, now),
+          gt(authSessions.absoluteExpiresAt, now),
+        ),
+      )
+      .returning({ id: authSessions.id });
+
+    return updated.length === 1;
   }
 
   async revokeSession(tokenHash: string, now: Date): Promise<void> {
     await this.db
       .update(authSessions)
       .set({ revokedAt: now })
-      .where(and(eq(authSessions.tokenHash, tokenHash), isNull(authSessions.revokedAt)));
+      .where(
+        and(
+          or(
+            eq(authSessions.tokenHash, tokenHash),
+            and(
+              eq(authSessions.previousTokenHash, tokenHash),
+              gt(authSessions.previousTokenValidUntil, now),
+            ),
+          ),
+          isNull(authSessions.revokedAt),
+        ),
+      );
   }
 
   async recordSuccessfulLogin(accountId: string, now: Date): Promise<void> {

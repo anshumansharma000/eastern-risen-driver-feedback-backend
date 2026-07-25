@@ -1,11 +1,13 @@
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import { Type } from 'typebox';
+import { paginationSchema } from '../../shared/http/response.schemas.js';
 import type { AuthGuards } from '../auth/auth.guard.js';
 import {
   consentBodySchema,
   consentSchema,
   createQuestionnaireBodySchema,
   idParamsSchema,
+  paginationQuerySchema,
   questionnaireSummarySchema,
   questionnaireVersionParamsSchema,
   questionnaireVersionSchema,
@@ -78,10 +80,24 @@ export const questionnaireRoutes: FastifyPluginAsyncTypebox<QuestionnaireRouteOp
       schema: {
         tags: ['questionnaires'],
         summary: 'List questionnaires',
-        response: { 200: Type.Object({ data: Type.Array(questionnaireSummarySchema) }) },
+        querystring: paginationQuerySchema,
+        response: {
+          200: Type.Object({
+            data: Type.Array(questionnaireSummarySchema),
+            pagination: paginationSchema,
+          }),
+        },
       },
     },
-    async () => ({ data: (await options.questionnaireService.list()).map(serializeQuestionnaire) }),
+    async (request) => {
+      const page = request.query.page ?? 1;
+      const pageSize = request.query.pageSize ?? 25;
+      const result = await options.questionnaireService.list({ page, pageSize });
+      return {
+        data: result.items.map(serializeQuestionnaire),
+        pagination: { page, pageSize, total: result.total },
+      };
+    },
   );
 
   app.patch(
@@ -130,14 +146,27 @@ export const questionnaireRoutes: FastifyPluginAsyncTypebox<QuestionnaireRouteOp
         tags: ['questionnaires'],
         summary: 'List questionnaire versions',
         params: idParamsSchema,
-        response: { 200: Type.Object({ data: Type.Array(versionSummarySchema) }) },
+        querystring: paginationQuerySchema,
+        response: {
+          200: Type.Object({
+            data: Type.Array(versionSummarySchema),
+            pagination: paginationSchema,
+          }),
+        },
       },
     },
-    async (request) => ({
-      data: (await options.questionnaireService.listVersions(request.params.id)).map(
-        serializeVersionSummary,
-      ),
-    }),
+    async (request) => {
+      const page = request.query.page ?? 1;
+      const pageSize = request.query.pageSize ?? 25;
+      const result = await options.questionnaireService.listVersions(request.params.id, {
+        page,
+        pageSize,
+      });
+      return {
+        data: result.items.map(serializeVersionSummary),
+        pagination: { page, pageSize, total: result.total },
+      };
+    },
   );
 
   app.post(

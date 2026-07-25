@@ -20,6 +20,7 @@
     "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
+    "db:migrate:production": "node dist/scripts/migrate.js",
     "db:studio": "drizzle-kit studio",
     "admin:create": "tsx src/scripts/create-admin.ts",
     "session:cleanup": "tsx src/scripts/cleanup-sessions.ts"
@@ -31,7 +32,6 @@
     "@fastify/rate-limit": "11.1.0",
     "@fastify/sensible": "6.0.4",
     "@fastify/swagger": "9.8.1",
-    "@fastify/swagger-ui": "6.1.0",
     "@fastify/type-provider-typebox": "6.1.0",
     "argon2": "0.45.0",
     "dotenv": "17.4.2",
@@ -43,6 +43,7 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@fastify/swagger-ui": "6.1.0",
     "@types/node": "24.10.1",
     "@types/pg": "8.15.6",
     "drizzle-kit": "0.31.10",

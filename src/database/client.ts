@@ -12,7 +12,16 @@ export interface DatabaseClient {
   close(): Promise<void>;
 }
 
-export function createDatabaseClient(config: AppConfig): DatabaseClient {
+export type DatabasePoolErrorHandler = (error: Error) => void;
+
+function reportUnexpectedPoolError(error: Error): void {
+  console.error('Unexpected error on idle PostgreSQL connection', error);
+}
+
+export function createDatabaseClient(
+  config: AppConfig,
+  onPoolError: DatabasePoolErrorHandler = reportUnexpectedPoolError,
+): DatabaseClient {
   const pool = new Pool({
     connectionString: config.databaseUrl,
     ssl: config.databaseSsl,
@@ -22,6 +31,10 @@ export function createDatabaseClient(config: AppConfig): DatabaseClient {
     statement_timeout: config.databaseStatementTimeoutMs,
     application_name: 'driver-feedback-api',
   });
+  // Idle clients can still fail during a database restart, failover, or network
+  // interruption. pg removes the failed client, but an unhandled pool "error"
+  // event would otherwise terminate the Node.js process.
+  pool.on('error', onPoolError);
   const db = drizzle({ client: pool, schema });
 
   return {

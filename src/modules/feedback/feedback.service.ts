@@ -12,6 +12,7 @@ import { isPostgresError } from '../../shared/database/postgres-error.js';
 import type { FieldEncryptor } from '../../shared/security/field-encryption.js';
 import { AppError } from '../../shared/errors/app-error.js';
 import type { QuestionnaireService } from '../questionnaires/questionnaire.service.js';
+import type { SettingsService } from '../settings/settings.service.js';
 import { validateFeedbackAnswers } from './answer.validator.js';
 import { buildQuestionnaireSnapshot } from './questionnaire-snapshot.js';
 
@@ -36,6 +37,7 @@ export class FeedbackService {
   constructor(
     private readonly db: AppDatabase,
     private readonly questionnaires: QuestionnaireService,
+    private readonly settings: SettingsService,
     private readonly encryptor: FieldEncryptor,
     private readonly handoffTtlHours: number,
     private readonly now: () => Date = () => new Date(),
@@ -111,13 +113,14 @@ export class FeedbackService {
 
   async getContext(token: string) {
     const handoff = await this.resolveHandoff(token, true);
-    const [trip, version] = await Promise.all([
+    const [trip, version, settings] = await Promise.all([
       this.getTrip(handoff.tripId),
       this.questionnaires.getVersionById(handoff.questionnaireVersionId),
+      this.settings.get(),
     ]);
     const consent = await this.questionnaires.getConsentById(handoff.consentVersionId);
     if (trip.status !== 'FEEDBACK_STARTED') this.invalidHandoff();
-    return { trip, version, consent, snapshot: buildQuestionnaireSnapshot(version) };
+    return { trip, version, consent, settings, snapshot: buildQuestionnaireSnapshot(version) };
   }
 
   async submit(token: string, input: SubmitFeedbackInput) {

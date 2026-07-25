@@ -1,5 +1,16 @@
 import { sql } from 'drizzle-orm';
-import { check, index, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  check,
+  index,
+  integer,
+  pgTable,
+  text,
+  time,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from 'drizzle-orm/pg-core';
 import { authAccounts } from './accounts.js';
 import { driverSourceType } from './enums.js';
 import { vendors } from './vendors.js';
@@ -16,6 +27,11 @@ export const drivers = pgTable(
     phone: text('phone'),
     sourceType: driverSourceType('source_type').notNull(),
     vendorId: uuid('vendor_id').references(() => vendors.id, { onDelete: 'restrict' }),
+    assignmentEnabled: boolean('assignment_enabled').notNull().default(true),
+    shiftStartTime: time('shift_start_time'),
+    shiftEndTime: time('shift_end_time'),
+    timeZone: text('time_zone').notNull().default('Asia/Kolkata'),
+    maxDailyDutyMinutes: integer('max_daily_duty_minutes').notNull().default(720),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -27,5 +43,33 @@ export const drivers = pgTable(
       sql`(${table.sourceType} = 'OUTSOURCED' AND ${table.vendorId} IS NOT NULL)
           OR (${table.sourceType} = 'AGENCY' AND ${table.vendorId} IS NULL)`,
     ),
+    check(
+      'drivers_shift_pair_check',
+      sql`(${table.shiftStartTime} IS NULL AND ${table.shiftEndTime} IS NULL)
+          OR (${table.shiftStartTime} IS NOT NULL AND ${table.shiftEndTime} IS NOT NULL
+              AND ${table.shiftStartTime} <> ${table.shiftEndTime})`,
+    ),
+    check(
+      'drivers_max_daily_duty_minutes_check',
+      sql`${table.maxDailyDutyMinutes} BETWEEN 1 AND 1440`,
+    ),
+  ],
+);
+
+export const driverLeavePeriods = pgTable(
+  'driver_leave_periods',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    driverId: uuid('driver_id')
+      .notNull()
+      .references(() => drivers.id, { onDelete: 'cascade' }),
+    startsAt: timestamp('starts_at', { withTimezone: true }).notNull(),
+    endsAt: timestamp('ends_at', { withTimezone: true }).notNull(),
+    reason: text('reason'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('driver_leave_periods_driver_time_idx').on(table.driverId, table.startsAt, table.endsAt),
+    check('driver_leave_periods_range_check', sql`${table.endsAt} > ${table.startsAt}`),
   ],
 );

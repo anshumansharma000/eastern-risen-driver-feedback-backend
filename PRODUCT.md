@@ -6,7 +6,7 @@
 **Initial platform:** Responsive web application  
 **Initial audience:** One travel agency  
 **Language:** English  
-**Last updated:** 2026-07-20
+**Last updated:** 2026-07-25
 
 ## 1. Purpose of this document
 
@@ -86,7 +86,7 @@ The driver can:
 - Enter an unassigned trip manually and start its feedback flow.
 - View their own aggregate overall score and aggregate category scores.
 - Filter their aggregate results by month.
-- Request a password-reset link by email.
+- Ask an administrator to reset a forgotten password.
 
 The driver must not be able to:
 
@@ -124,7 +124,7 @@ The administrator must not be able to edit the contents of a submitted feedback 
 2. The service validates that the driver account is active.
 3. The driver arrives at their driver home screen.
 4. The driver can select an assigned trip or create an unassigned trip.
-5. A forgotten password can be reset through an emailed reset link. An administrator can also initiate the reset.
+5. For a forgotten password, the driver contacts an administrator, who directly assigns a new password.
 
 ### 6.2 Admin-assigned trip
 
@@ -192,11 +192,18 @@ The administrator must not be able to edit the contents of a submitted feedback 
 - **AUTH-001 — Required:** Drivers authenticate with a unique driver ID and password.
 - **AUTH-002 — Required:** Administrators authenticate separately from drivers.
 - **AUTH-003 — Required:** Deactivated or archived users cannot sign in.
-- **AUTH-004 — Required:** Drivers can request a time-limited password-reset link by email.
-- **AUTH-005 — Required:** Administrators can initiate a driver's password reset.
+- **AUTH-004 — Required:** Drivers with a forgotten password use the administrator-assisted reset process; no public or email reset flow is exposed.
+- **AUTH-005 — Required:** Administrators can directly set a new driver password; the reset revokes all existing driver sessions.
 - **AUTH-006 — Required:** Passenger feedback mode must not expose authenticated driver or admin pages.
 - **AUTH-007 — Required:** Authentication and password storage must follow current security best practices; plaintext passwords must never be stored.
 - **AUTH-008 — Recommended default:** Require reauthentication or a driver-only unlock action after the passenger flow ends.
+- **AUTH-009 — Required:** Administrators and drivers can read and update their
+  own basic account profile. Drivers may self-edit display name, email, and
+  phone; operational employment and assignment fields remain
+  administrator-controlled.
+- **AUTH-010 — Required:** Authenticated users can change their own password
+  after supplying the current password. Successful password changes and resets
+  revoke all existing sessions for the account.
 
 ### 7.2 Driver and vendor management
 
@@ -206,6 +213,9 @@ The administrator must not be able to edit the contents of a submitted feedback 
 - **DRV-004 — Required:** Historical trips and feedback remain linked to archived drivers and vendors.
 - **DRV-005 — Required:** Hard deletion must not remove records required for historical reporting or auditability.
 - **DRV-006 — Required:** Driver IDs must be unique among accounts that may authenticate.
+- **DRV-007 — Required:** Administrators can open a dedicated driver detail and
+  directly assign a new password without the password being logged, persisted
+  as plaintext, or returned by the API.
 
 ### 7.3 Trip management
 
@@ -306,7 +316,10 @@ The administrator must not be able to edit the contents of a submitted feedback 
 - **ANL-004 — Required:** Support comparison of agency drivers and outsourced drivers.
 - **ANL-005 — Required:** Support filters for date/month, driver, driver source, vendor, and rating/category where applicable.
 - **ANL-006 — Required:** Administrators can inspect the individual feedback behind dashboard metrics.
-- **ANL-007 — TBD:** Rating threshold or rule that classifies feedback as negative.
+- **ANL-007 — Required:** The administrator may configure a 1–5 inclusive
+  average-score threshold used to classify negative feedback. Until configured,
+  negative-feedback counts are unavailable rather than inferred from a
+  hard-coded rule.
 
 ### 7.10 Reports and exports
 
@@ -466,8 +479,9 @@ Vehicle management details are implementation-level until expanded by a future p
 - Backend authorization must enforce permissions independently of frontend visibility.
 - Data must be encrypted in transit in production.
 - Passwords must be hashed using a suitable adaptive password-hashing algorithm.
-- Password-reset tokens must be single-use, time-limited, and stored safely.
-- Logs, analytics telemetry, and error reports must not expose passwords, reset tokens, coupon codes, or unnecessary passenger information.
+- Administrator-assigned driver passwords must be hashed immediately and must
+  never be stored or logged as plaintext.
+- Logs, analytics telemetry, and error reports must not expose passwords, coupon codes, or unnecessary passenger information.
 - Offline payloads contain personal information and must be minimized, isolated from normal UI access, and deleted locally after confirmed synchronization.
 - Production retention periods and the wording of the consent/privacy notice are TBD and should be approved by the agency before launch.
 
@@ -611,7 +625,7 @@ These items do not block initial domain and API design unless noted otherwise:
 2. Hosting provider, production domain, deployment process, and environments.
 3. Transactional email provider and sender domain.
 4. Exact password/session policies and supported browser versions.
-5. Negative-feedback classification threshold.
+5. The initial negative-feedback threshold value the agency wants to configure.
 6. Reward probability semantics, including a possible “no prize” outcome.
 7. Reward email templates, retry limits, and undeliverable-email handling.
 8. Exact data-retention period and final privacy/consent wording.
@@ -628,3 +642,5 @@ Any change that affects actors, permissions, workflows, stored data, API behavio
 | Date | Change |
 | --- | --- |
 | 2026-07-20 | Initial product source of truth created from product discovery discussions. |
+| 2026-07-25 | Made negative-feedback classification an optional configurable 1–5 average-score threshold; unconfigured analytics return no inferred negative count. |
+| 2026-07-25 | Added admin/driver self-service profiles, current-password changes with session revocation, admin driver detail, and direct administrator-assigned driver password resets. |

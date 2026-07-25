@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull, max, ne } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, isNull, max, ne } from 'drizzle-orm';
 import type { AppDatabase } from '../../database/client.js';
 import {
   auditEvents,
@@ -10,6 +10,11 @@ import {
 } from '../../database/schema/index.js';
 import { AppError } from '../../shared/errors/app-error.js';
 import { type QuestionInput, validateQuestionnaireQuestions } from './questionnaire.validator.js';
+
+export interface PaginationInput {
+  readonly page: number;
+  readonly pageSize: number;
+}
 
 export class QuestionnaireService {
   constructor(private readonly db: AppDatabase) {}
@@ -41,8 +46,18 @@ export class QuestionnaireService {
     });
   }
 
-  async list() {
-    return this.db.select().from(questionnaires).orderBy(asc(questionnaires.name));
+  async list(input: PaginationInput) {
+    const offset = (input.page - 1) * input.pageSize;
+    const [items, [total]] = await Promise.all([
+      this.db
+        .select()
+        .from(questionnaires)
+        .orderBy(asc(questionnaires.name), asc(questionnaires.id))
+        .limit(input.pageSize)
+        .offset(offset),
+      this.db.select({ value: count() }).from(questionnaires),
+    ]);
+    return { items, total: total?.value ?? 0 };
   }
 
   async updateName(id: string, name: string, actorAccountId: string) {
@@ -132,13 +147,21 @@ export class QuestionnaireService {
     return version!;
   }
 
-  async listVersions(questionnaireId: string) {
+  async listVersions(questionnaireId: string, input: PaginationInput) {
     await this.assertQuestionnaire(questionnaireId);
-    return this.db
-      .select()
-      .from(questionnaireVersions)
-      .where(eq(questionnaireVersions.questionnaireId, questionnaireId))
-      .orderBy(desc(questionnaireVersions.versionNumber));
+    const filter = eq(questionnaireVersions.questionnaireId, questionnaireId);
+    const offset = (input.page - 1) * input.pageSize;
+    const [items, [total]] = await Promise.all([
+      this.db
+        .select()
+        .from(questionnaireVersions)
+        .where(filter)
+        .orderBy(desc(questionnaireVersions.versionNumber))
+        .limit(input.pageSize)
+        .offset(offset),
+      this.db.select({ value: count() }).from(questionnaireVersions).where(filter),
+    ]);
+    return { items, total: total?.value ?? 0 };
   }
 
   async getVersion(questionnaireId: string, versionId: string) {
@@ -197,7 +220,7 @@ export class QuestionnaireService {
             scoreMax: input.scoreMax ?? null,
           })
           .returning({ id: versionQuestions.id });
-        if (input.options.length) {
+        if (input.options?.length) {
           await tx.insert(questionOptions).values(
             input.options.map((option, optionOrder) => ({
               versionQuestionId: question!.id,

@@ -22,6 +22,7 @@ const tripFields = {
   pickupLocation: Type.String({ minLength: 1, maxLength: 500 }),
   destination: Type.String({ minLength: 1, maxLength: 500 }),
   scheduledAt: Type.String({ format: 'date-time' }),
+  scheduledEndAt: Type.String({ format: 'date-time' }),
   vehicleId: Type.String({ format: 'uuid' }),
 };
 
@@ -39,6 +40,7 @@ export const updateAdminTripBodySchema = Type.Object(
     pickupLocation: Type.Optional(tripFields.pickupLocation),
     destination: Type.Optional(tripFields.destination),
     scheduledAt: Type.Optional(tripFields.scheduledAt),
+    scheduledEndAt: Type.Optional(tripFields.scheduledEndAt),
     vehicleId: Type.Optional(tripFields.vehicleId),
     driverId: Type.Optional(Type.String({ format: 'uuid' })),
   },
@@ -66,6 +68,7 @@ export const tripSchema = Type.Object({
   pickupLocation: Type.String(),
   destination: Type.String(),
   scheduledAt: Type.String({ format: 'date-time' }),
+  scheduledEndAt: Type.String({ format: 'date-time' }),
   vehicle: Type.Object({
     id: Type.String({ format: 'uuid' }),
     registrationNumber: Type.String(),

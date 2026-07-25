@@ -23,3 +23,21 @@ export interface AuthenticatedSession {
   readonly principal: AuthPrincipal;
   readonly expiresAt: Date;
 }
+
+export interface ResolvedAuthSession {
+  readonly id: string;
+  readonly principal: AuthPrincipal;
+  readonly tokenHash: string;
+  readonly matchedCurrentToken: boolean;
+  readonly expiresAt: Date;
+  readonly absoluteExpiresAt: Date;
+  readonly rotatedAt: Date;
+}
+
+export interface SessionResolution {
+  readonly principal: AuthPrincipal;
+  readonly renewal?: {
+    readonly token: string;
+    readonly expiresAt: Date;
+  };
+}

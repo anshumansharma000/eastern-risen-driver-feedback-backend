@@ -16,7 +16,10 @@ export interface AppConfig {
   readonly databaseIdleTimeoutMs: number;
   readonly databaseStatementTimeoutMs: number;
   readonly sessionCookieName: string;
-  readonly sessionTtlHours: number;
+  readonly sessionIdleTtlHours: number;
+  readonly sessionAbsoluteTtlDays: number;
+  readonly sessionRotationIntervalHours: number;
+  readonly sessionRotationGraceSeconds: number;
   readonly feedbackHandoffTtlHours: number;
   readonly dataEncryptionKey: Buffer;
   readonly frontendOrigins: readonly string[];
@@ -76,6 +79,19 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
   if (nodeEnv === 'production' && frontendOrigins.length === 0) {
     throw new Error('FRONTEND_ORIGINS is required in production');
   }
+  const sessionIdleTtlHours = parsePositiveInteger(
+    'SESSION_IDLE_TTL_HOURS',
+    environment.SESSION_IDLE_TTL_HOURS ?? environment.SESSION_TTL_HOURS,
+    72,
+  );
+  const sessionRotationIntervalHours = parsePositiveInteger(
+    'SESSION_ROTATION_INTERVAL_HOURS',
+    environment.SESSION_ROTATION_INTERVAL_HOURS,
+    24,
+  );
+  if (sessionRotationIntervalHours >= sessionIdleTtlHours) {
+    throw new Error('SESSION_ROTATION_INTERVAL_HOURS must be less than SESSION_IDLE_TTL_HOURS');
+  }
 
   return {
     nodeEnv,
@@ -106,7 +122,18 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
       30_000,
     ),
     sessionCookieName: environment.SESSION_COOKIE_NAME ?? 'id',
-    sessionTtlHours: parsePositiveInteger('SESSION_TTL_HOURS', environment.SESSION_TTL_HOURS, 12),
+    sessionIdleTtlHours,
+    sessionAbsoluteTtlDays: parsePositiveInteger(
+      'SESSION_ABSOLUTE_TTL_DAYS',
+      environment.SESSION_ABSOLUTE_TTL_DAYS,
+      30,
+    ),
+    sessionRotationIntervalHours,
+    sessionRotationGraceSeconds: parsePositiveInteger(
+      'SESSION_ROTATION_GRACE_SECONDS',
+      environment.SESSION_ROTATION_GRACE_SECONDS,
+      60,
+    ),
     feedbackHandoffTtlHours: parsePositiveInteger(
       'FEEDBACK_HANDOFF_TTL_HOURS',
       environment.FEEDBACK_HANDOFF_TTL_HOURS,

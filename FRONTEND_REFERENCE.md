@@ -3,10 +3,10 @@
 **Product:** Eastern Risen Driver Feedback Service  
 **Organization:** Eastern Risen Expedition Pvt. Ltd.  
 **Status:** Living frontend reference  
-**Last updated:** 2026-07-22  
+**Last updated:** 2026-07-25
 **Frontend stack:** Next.js, TypeScript, Tailwind CSS  
 **Initial locale:** English  
-**Display timezone:** `Asia/Kolkata`
+**Display timezone:** Server-provided agency setting (`Asia/Kolkata` default)
 
 ## 1. Purpose and authority
 
@@ -53,8 +53,6 @@ app/
   (auth)/
     admin/login/
     driver/login/
-    forgot-password/
-    reset-password/
   (driver)/driver/
     page.tsx
     trips/
@@ -87,15 +85,18 @@ app/
 - Driver navigation contains Home/Trips, Performance, Sync status, and Account/Sign out.
 - Admin navigation contains Dashboard, Feedback, Trips, Drivers, Vendors, Vehicles, Questionnaires, Rewards, Reports, and Settings. Hide or mark modules not supported by the current API; never fake persistence.
 - Preserve useful admin filters in URL search parameters.
-- Do not put feedback tokens, reset tokens, passenger data, or coupon codes into URLs unless a backend-designed single-use reset route explicitly requires a token.
+- Do not put feedback tokens, passenger data, passwords, or coupon codes into URLs.
 
 ## 5. Core screen inventory
 
 ### Authentication
 
-- Driver sign-in: driver code, password, forgot-password entry.
+- Driver sign-in: driver code and password. Forgotten passwords are handled by an administrator.
 - Admin sign-in: email, password.
-- Forgot/reset password: implementation depends on backend availability; do not imply an email was sent unless confirmed.
+- Admin driver password reset: collect and confirm a new password, submit it once, and never retain it after success.
+  Acceptance means queued for delivery, not proof that an email arrived.
+- Admin and driver profile: basic self-service fields plus current-password
+  change; successful password changes sign the account out everywhere.
 - Session expired, access denied, and service unavailable states.
 
 ### Driver
@@ -235,7 +236,7 @@ Use a single typed client boundary that:
 - Driver: trip list/create/detail and start feedback.
 - Passenger: feedback context and feedback submission.
 
-See [FRONTEND_API_REFERENCE.md](FRONTEND_API_REFERENCE.md) for frontend integration details and [README.md](README.md) for the compact current endpoint list. Verify both against OpenAPI before wiring UI. Analytics, feedback review, rewards, exports, password reset, and driver aggregates may require backend work if not present in the live contract.
+See [FRONTEND_API_REFERENCE.md](FRONTEND_API_REFERENCE.md) for frontend integration details and [README.md](README.md) for the compact current endpoint list. Verify both against OpenAPI before wiring UI. Analytics, feedback review, rewards, exports, and driver aggregates may require backend work if not present in the live contract.
 
 ## 9. Passenger submission and offline queue
 
@@ -388,7 +389,6 @@ Do not copy another product's logo, trademark, proprietary illustration, exact c
 - Reward probability/no-prize semantics and final wheel visual design.
 - Analytics/chart endpoint contracts.
 - Feedback review and export endpoint contracts.
-- Password-reset endpoint and delivery behavior.
 - Driver aggregate endpoint contract.
 - Offline payload protection details appropriate to browser capabilities and threat model.
 - Whether dark mode is desired after MVP.

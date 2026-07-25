@@ -117,7 +117,7 @@ export class VendorService {
         .select()
         .from(vendors)
         .where(filter)
-        .orderBy(asc(vendors.name))
+        .orderBy(asc(vendors.name), asc(vendors.id))
         .limit(input.pageSize)
         .offset(offset),
       this.db.select({ value: count() }).from(vendors).where(filter),

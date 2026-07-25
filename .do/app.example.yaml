@@ -1,0 +1,115 @@
+# Copy this file to a secure working location, replace every CHANGE_ME value,
+# and validate it in DigitalOcean before creating or updating the app.
+# This spec attaches no database resource: connect the existing DigitalOcean
+# Managed PostgreSQL cluster in the control panel and use its connection URL.
+alerts:
+  - rule: DEPLOYMENT_FAILED
+  - rule: DOMAIN_FAILED
+
+name: eastern-risen-driver-feedback-api
+region: blr
+
+envs:
+  - key: NODE_ENV
+    scope: RUN_TIME
+    type: GENERAL
+    value: production
+  - key: DATABASE_URL
+    scope: RUN_TIME
+    type: SECRET
+    value: CHANGE_ME_DIGITALOCEAN_DATABASE_URL
+  - key: DATABASE_SSL_MODE
+    scope: RUN_TIME
+    type: GENERAL
+    value: verify-full
+  - key: DATABASE_CA_CERT_BASE64
+    scope: RUN_TIME
+    type: SECRET
+    value: CHANGE_ME_BASE64_DATABASE_CA_CERTIFICATE
+  - key: DATA_ENCRYPTION_KEY_BASE64
+    scope: RUN_TIME
+    type: SECRET
+    value: CHANGE_ME_32_BYTE_BASE64_KEY
+  - key: FRONTEND_ORIGINS
+    scope: RUN_TIME
+    type: GENERAL
+    value: https://CHANGE_ME_FRONTEND_ORIGIN
+  - key: LOG_LEVEL
+    scope: RUN_TIME
+    type: GENERAL
+    value: info
+  - key: TRUST_PROXY_HOPS
+    scope: RUN_TIME
+    type: GENERAL
+    value: '1'
+  - key: DATABASE_MAX_CONNECTIONS
+    scope: RUN_TIME
+    type: GENERAL
+    value: '10'
+  - key: SESSION_IDLE_TTL_HOURS
+    scope: RUN_TIME
+    type: GENERAL
+    value: '72'
+  - key: SESSION_ABSOLUTE_TTL_DAYS
+    scope: RUN_TIME
+    type: GENERAL
+    value: '30'
+  - key: SESSION_ROTATION_INTERVAL_HOURS
+    scope: RUN_TIME
+    type: GENERAL
+    value: '24'
+  - key: SESSION_ROTATION_GRACE_SECONDS
+    scope: RUN_TIME
+    type: GENERAL
+    value: '60'
+
+services:
+  - name: api
+    github:
+      repo: anshumansharma000/easter-risen-driver-feedback-backend
+      branch: main
+      deploy_on_push: false
+    source_dir: /
+    dockerfile_path: Dockerfile
+    http_port: 3000
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-1gb-fixed
+    health_check:
+      http_path: /health/ready
+      initial_delay_seconds: 15
+      period_seconds: 10
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 3
+    liveness_health_check:
+      http_path: /health/live
+      initial_delay_seconds: 15
+      period_seconds: 30
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 3
+    alerts:
+      - rule: RESTART_COUNT
+        operator: GREATER_THAN
+        value: 2
+        window: FIVE_MINUTES
+
+jobs:
+  - name: migrate
+    kind: PRE_DEPLOY
+    github:
+      repo: anshumansharma000/easter-risen-driver-feedback-backend
+      branch: main
+      deploy_on_push: false
+    source_dir: /
+    dockerfile_path: Dockerfile
+    run_command: npm run db:migrate:production
+    instance_size_slug: apps-s-1vcpu-0.5gb
+
+ingress:
+  rules:
+    - component:
+        name: api
+      match:
+        path:
+          prefix: /

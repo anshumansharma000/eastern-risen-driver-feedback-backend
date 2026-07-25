@@ -1,6 +1,13 @@
-import { and, asc, count, eq, ne } from 'drizzle-orm';
+import { and, asc, count, eq, isNull, ne } from 'drizzle-orm';
 import type { AppDatabase } from '../../database/client.js';
-import { auditEvents, authAccounts, drivers, vendors } from '../../database/schema/index.js';
+import {
+  auditEvents,
+  authAccounts,
+  authSessions,
+  driverLeavePeriods,
+  drivers,
+  vendors,
+} from '../../database/schema/index.js';
 import { isPostgresError } from '../../shared/database/postgres-error.js';
 import { AppError } from '../../shared/errors/app-error.js';
 import type { AccountStatus } from '../auth/auth.types.js';
@@ -14,6 +21,11 @@ export interface CreateDriverInput {
   readonly phone?: string;
   readonly sourceType: 'AGENCY' | 'OUTSOURCED';
   readonly vendorId?: string | null;
+  readonly assignmentEnabled?: boolean;
+  readonly shiftStartTime?: string | null;
+  readonly shiftEndTime?: string | null;
+  readonly timeZone?: string;
+  readonly maxDailyDutyMinutes?: number;
 }
 
 export interface ListDriversInput {
@@ -29,6 +41,22 @@ export interface UpdateDriverInput {
   readonly phone?: string | null;
   readonly sourceType?: 'AGENCY' | 'OUTSOURCED';
   readonly vendorId?: string | null;
+  readonly assignmentEnabled?: boolean;
+  readonly shiftStartTime?: string | null;
+  readonly shiftEndTime?: string | null;
+  readonly timeZone?: string;
+  readonly maxDailyDutyMinutes?: number;
+}
+
+export interface CreateDriverLeaveInput {
+  readonly startsAt: string;
+  readonly endsAt: string;
+  readonly reason?: string;
+}
+
+export interface ListDriverLeavesInput {
+  readonly page: number;
+  readonly pageSize: number;
 }
 
 const driverSelection = {
@@ -41,6 +69,11 @@ const driverSelection = {
   sourceType: drivers.sourceType,
   vendorId: drivers.vendorId,
   vendorName: vendors.name,
+  assignmentEnabled: drivers.assignmentEnabled,
+  shiftStartTime: drivers.shiftStartTime,
+  shiftEndTime: drivers.shiftEndTime,
+  timeZone: drivers.timeZone,
+  maxDailyDutyMinutes: drivers.maxDailyDutyMinutes,
   status: authAccounts.status,
   createdAt: drivers.createdAt,
   updatedAt: drivers.updatedAt,
@@ -55,6 +88,7 @@ export class DriverService {
 
   async create(input: CreateDriverInput, actorAccountId: string) {
     const vendorName = await this.resolveVendorName(input.sourceType, input.vendorId);
+    validateScheduleSettings(input.shiftStartTime, input.shiftEndTime, input.timeZone);
 
     const passwordHash = await this.passwords.hash(input.password);
 
@@ -78,6 +112,11 @@ export class DriverService {
             phone: input.phone?.trim() || null,
             sourceType: input.sourceType,
             vendorId: input.sourceType === 'OUTSOURCED' ? input.vendorId : null,
+            assignmentEnabled: input.assignmentEnabled ?? true,
+            shiftStartTime: input.shiftStartTime ?? null,
+            shiftEndTime: input.shiftEndTime ?? null,
+            timeZone: input.timeZone ?? 'Asia/Kolkata',
+            maxDailyDutyMinutes: input.maxDailyDutyMinutes ?? 720,
           })
           .returning();
 
@@ -122,6 +161,9 @@ export class DriverService {
         accountId: authAccounts.id,
         sourceType: drivers.sourceType,
         vendorId: drivers.vendorId,
+        shiftStartTime: drivers.shiftStartTime,
+        shiftEndTime: drivers.shiftEndTime,
+        timeZone: drivers.timeZone,
       })
       .from(drivers)
       .innerJoin(authAccounts, eq(authAccounts.id, drivers.accountId))
@@ -138,6 +180,11 @@ export class DriverService {
     const sourceType = input.sourceType ?? current.sourceType;
     const vendorId = input.vendorId !== undefined ? input.vendorId : current.vendorId;
     await this.resolveVendorName(sourceType, vendorId);
+    validateScheduleSettings(
+      input.shiftStartTime !== undefined ? input.shiftStartTime : current.shiftStartTime,
+      input.shiftEndTime !== undefined ? input.shiftEndTime : current.shiftEndTime,
+      input.timeZone ?? current.timeZone,
+    );
 
     try {
       return await this.db.transaction(async (tx) => {
@@ -158,6 +205,15 @@ export class DriverService {
             ...(input.phone !== undefined ? { phone: input.phone?.trim() || null } : {}),
             sourceType,
             vendorId: sourceType === 'OUTSOURCED' ? vendorId : null,
+            ...(input.assignmentEnabled !== undefined
+              ? { assignmentEnabled: input.assignmentEnabled }
+              : {}),
+            ...(input.shiftStartTime !== undefined ? { shiftStartTime: input.shiftStartTime } : {}),
+            ...(input.shiftEndTime !== undefined ? { shiftEndTime: input.shiftEndTime } : {}),
+            ...(input.timeZone !== undefined ? { timeZone: input.timeZone } : {}),
+            ...(input.maxDailyDutyMinutes !== undefined
+              ? { maxDailyDutyMinutes: input.maxDailyDutyMinutes }
+              : {}),
             updatedAt: new Date(),
           })
           .where(eq(drivers.id, id));
@@ -194,6 +250,24 @@ export class DriverService {
     }
   }
 
+  async get(id: string) {
+    const [driver] = await this.db
+      .select(driverSelection)
+      .from(drivers)
+      .innerJoin(authAccounts, eq(authAccounts.id, drivers.accountId))
+      .leftJoin(vendors, eq(vendors.id, drivers.vendorId))
+      .where(eq(drivers.id, id))
+      .limit(1);
+    if (!driver) {
+      throw new AppError({
+        code: 'DRIVER_NOT_FOUND',
+        message: 'Driver was not found',
+        statusCode: 404,
+      });
+    }
+    return driver;
+  }
+
   async list(input: ListDriversInput) {
     const filter = input.status
       ? eq(authAccounts.status, input.status)
@@ -208,7 +282,7 @@ export class DriverService {
     const [items, [total]] = await Promise.all([
       baseJoin
         .where(filter)
-        .orderBy(asc(authAccounts.displayName))
+        .orderBy(asc(authAccounts.displayName), asc(drivers.id))
         .limit(input.pageSize)
         .offset(offset),
       this.db
@@ -218,6 +292,53 @@ export class DriverService {
         .where(filter),
     ]);
     return { items, total: total?.value ?? 0 };
+  }
+
+  async resetPassword(id: string, newPassword: string, actorAccountId: string) {
+    const [driver] = await this.db
+      .select({
+        accountId: authAccounts.id,
+        status: authAccounts.status,
+      })
+      .from(drivers)
+      .innerJoin(authAccounts, eq(authAccounts.id, drivers.accountId))
+      .where(eq(drivers.id, id))
+      .limit(1);
+    if (!driver || driver.status === 'ARCHIVED') {
+      throw new AppError({
+        code: 'DRIVER_NOT_FOUND',
+        message: 'Driver was not found',
+        statusCode: 404,
+      });
+    }
+
+    const passwordHash = await this.passwords.hash(newPassword);
+    const now = new Date();
+    await this.db.transaction(async (tx) => {
+      const [updatedAccount] = await tx
+        .update(authAccounts)
+        .set({ passwordHash, passwordChangedAt: now, updatedAt: now })
+        .where(and(eq(authAccounts.id, driver.accountId), ne(authAccounts.status, 'ARCHIVED')))
+        .returning({ id: authAccounts.id });
+      if (!updatedAccount) {
+        throw new AppError({
+          code: 'DRIVER_NOT_FOUND',
+          message: 'Driver was not found',
+          statusCode: 404,
+        });
+      }
+      await tx
+        .update(authSessions)
+        .set({ revokedAt: now })
+        .where(and(eq(authSessions.accountId, driver.accountId), isNull(authSessions.revokedAt)));
+      await tx.insert(auditEvents).values({
+        actorAccountId,
+        action: 'DRIVER_PASSWORD_RESET',
+        entityType: 'DRIVER',
+        entityId: id,
+        metadata: { sessionsRevoked: true },
+      });
+    });
   }
 
   async changeStatus(id: string, status: AccountStatus, actorAccountId: string) {
@@ -260,6 +381,95 @@ export class DriverService {
     });
   }
 
+  async createLeave(id: string, input: CreateDriverLeaveInput, actorAccountId: string) {
+    const startsAt = new Date(input.startsAt);
+    const endsAt = new Date(input.endsAt);
+    if (endsAt <= startsAt) {
+      throw new AppError({
+        code: 'INVALID_DRIVER_LEAVE_PERIOD',
+        message: 'Driver leave must end after it starts',
+        statusCode: 400,
+      });
+    }
+    return this.db.transaction(async (tx) => {
+      const [driver] = await tx.select({ id: drivers.id }).from(drivers).where(eq(drivers.id, id));
+      if (!driver) {
+        throw new AppError({
+          code: 'DRIVER_NOT_FOUND',
+          message: 'Driver was not found',
+          statusCode: 404,
+        });
+      }
+      const [leave] = await tx
+        .insert(driverLeavePeriods)
+        .values({
+          driverId: id,
+          startsAt,
+          endsAt,
+          reason: input.reason?.trim() || null,
+        })
+        .returning();
+      await tx.insert(auditEvents).values({
+        actorAccountId,
+        action: 'DRIVER_LEAVE_CREATED',
+        entityType: 'DRIVER',
+        entityId: id,
+        metadata: { leaveId: leave!.id },
+      });
+      return leave!;
+    });
+  }
+
+  async listLeaves(id: string, input: ListDriverLeavesInput) {
+    const [driver] = await this.db
+      .select({ id: drivers.id })
+      .from(drivers)
+      .where(eq(drivers.id, id));
+    if (!driver) {
+      throw new AppError({
+        code: 'DRIVER_NOT_FOUND',
+        message: 'Driver was not found',
+        statusCode: 404,
+      });
+    }
+    const filter = eq(driverLeavePeriods.driverId, id);
+    const offset = (input.page - 1) * input.pageSize;
+    const [items, [total]] = await Promise.all([
+      this.db
+        .select()
+        .from(driverLeavePeriods)
+        .where(filter)
+        .orderBy(asc(driverLeavePeriods.startsAt), asc(driverLeavePeriods.id))
+        .limit(input.pageSize)
+        .offset(offset),
+      this.db.select({ value: count() }).from(driverLeavePeriods).where(filter),
+    ]);
+    return { items, total: total?.value ?? 0 };
+  }
+
+  async deleteLeave(id: string, leaveId: string, actorAccountId: string) {
+    return this.db.transaction(async (tx) => {
+      const [leave] = await tx
+        .delete(driverLeavePeriods)
+        .where(and(eq(driverLeavePeriods.id, leaveId), eq(driverLeavePeriods.driverId, id)))
+        .returning({ id: driverLeavePeriods.id });
+      if (!leave) {
+        throw new AppError({
+          code: 'DRIVER_LEAVE_NOT_FOUND',
+          message: 'Driver leave was not found',
+          statusCode: 404,
+        });
+      }
+      await tx.insert(auditEvents).values({
+        actorAccountId,
+        action: 'DRIVER_LEAVE_DELETED',
+        entityType: 'DRIVER',
+        entityId: id,
+        metadata: { leaveId },
+      });
+    });
+  }
+
   private async resolveVendorName(
     sourceType: 'AGENCY' | 'OUTSOURCED',
     vendorId: string | null | undefined,
@@ -285,5 +495,35 @@ export class DriverService {
       });
     }
     return vendor.name;
+  }
+}
+
+function validateScheduleSettings(
+  shiftStartTime: string | null | undefined,
+  shiftEndTime: string | null | undefined,
+  timeZone: string | undefined,
+) {
+  if ((shiftStartTime == null) !== (shiftEndTime == null)) {
+    throw new AppError({
+      code: 'INVALID_DRIVER_SHIFT',
+      message: 'Shift start and end times must either both be set or both be empty',
+      statusCode: 400,
+    });
+  }
+  if (shiftStartTime != null && shiftStartTime === shiftEndTime) {
+    throw new AppError({
+      code: 'INVALID_DRIVER_SHIFT',
+      message: 'Shift start and end times must differ',
+      statusCode: 400,
+    });
+  }
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone }).format();
+  } catch {
+    throw new AppError({
+      code: 'INVALID_TIME_ZONE',
+      message: 'The selected time zone is invalid',
+      statusCode: 400,
+    });
   }
 }

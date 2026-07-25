@@ -18,7 +18,7 @@ export interface QuestionInput {
   readonly contributesToScore: boolean;
   readonly scoreMin?: number | null;
   readonly scoreMax?: number | null;
-  readonly options: readonly {
+  readonly options?: readonly {
     readonly valueKey: string;
     readonly label: string;
     readonly scoreValue?: number | null;
@@ -43,18 +43,20 @@ export function validateQuestionnaireQuestions(
   }
 
   for (const question of questions) {
-    const optionKeys = question.options.map((option) => option.valueKey);
+    const options = question.options ?? [];
+    const optionKeys = options.map((option) => option.valueKey);
     if (new Set(optionKeys).size !== optionKeys.length) {
       invalid('DUPLICATE_OPTION_KEY', `Option keys for ${question.stableKey} must be unique`);
     }
     const acceptsOptions = OPTION_TYPES.has(question.questionType);
-    if (acceptsOptions && question.options.length < 2) {
+    if (publishing && acceptsOptions && options.length < 2) {
       invalid('QUESTION_OPTIONS_REQUIRED', `${question.stableKey} requires at least two options`);
     }
-    if (!acceptsOptions && question.options.length > 0) {
+    if (!acceptsOptions && options.length > 0) {
       invalid('QUESTION_OPTIONS_NOT_ALLOWED', `${question.stableKey} does not support options`);
     }
     if (
+      publishing &&
       question.questionType === 'STAR_RATING' &&
       (question.scoreMin == null ||
         question.scoreMax == null ||
@@ -66,9 +68,10 @@ export function validateQuestionnaireQuestions(
       );
     }
     if (
+      publishing &&
       question.contributesToScore &&
       acceptsOptions &&
-      question.options.some((option) => option.scoreValue == null)
+      options.some((option) => option.scoreValue == null)
     ) {
       invalid(
         'QUESTION_OPTION_SCORES_REQUIRED',

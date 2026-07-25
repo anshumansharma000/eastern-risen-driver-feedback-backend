@@ -16,6 +16,7 @@ import { authAccounts } from './accounts.js';
 import { drivers } from './drivers.js';
 import {
   driverSourceType,
+  feedbackReviewAction,
   feedbackReviewState,
   feedbackSubmissionMode,
   questionCategory,
@@ -134,6 +135,29 @@ export const feedbackAnswers = pgTable(
     index('feedback_answers_submission_order_idx').on(
       table.feedbackSubmissionId,
       table.displayOrderSnapshot,
+    ),
+    index('feedback_answers_category_score_idx').on(table.categorySnapshot, table.numericScore),
+  ],
+);
+
+export const feedbackReviewEvents = pgTable(
+  'feedback_review_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    feedbackSubmissionId: uuid('feedback_submission_id')
+      .notNull()
+      .references(() => feedbackSubmissions.id, { onDelete: 'restrict' }),
+    action: feedbackReviewAction('action').notNull(),
+    reason: text('reason'),
+    performedByAccountId: uuid('performed_by_account_id')
+      .notNull()
+      .references(() => authAccounts.id, { onDelete: 'restrict' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('feedback_review_events_submission_created_idx').on(
+      table.feedbackSubmissionId,
+      table.createdAt,
     ),
   ],
 );

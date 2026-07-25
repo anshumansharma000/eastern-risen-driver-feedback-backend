@@ -14,6 +14,7 @@ const originProtection: FastifyPluginAsync<OriginProtectionOptions> = async (app
 
   await app.register(cors, {
     credentials: true,
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     origin(origin, callback) {
       callback(null, !origin || allowedOrigins.has(origin));
     },

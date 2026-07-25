@@ -5,6 +5,7 @@ export interface TripView {
   readonly pickupLocation: string;
   readonly destination: string;
   readonly scheduledAt: Date;
+  readonly scheduledEndAt: Date;
   readonly vehicleId: string;
   readonly vehicleSnapshot: { readonly registrationNumber: string; readonly displayName: string };
   readonly driverId: string;
@@ -29,6 +30,7 @@ export function presentTrip(trip: TripView) {
     pickupLocation: trip.pickupLocation,
     destination: trip.destination,
     scheduledAt: trip.scheduledAt.toISOString(),
+    scheduledEndAt: trip.scheduledEndAt.toISOString(),
     vehicle: { id: trip.vehicleId, ...trip.vehicleSnapshot },
     driver: {
       id: trip.driverId,

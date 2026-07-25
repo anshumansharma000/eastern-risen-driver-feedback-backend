@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "trips_booking_reference_unique" ON "trips" USING btree (lower("booking_reference"));

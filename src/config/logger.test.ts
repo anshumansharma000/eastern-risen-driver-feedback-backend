@@ -9,6 +9,8 @@ describe('logger redaction', () => {
         'req.headers.cookie',
         'res.headers.set-cookie',
         'req.body.password',
+        'req.body.currentPassword',
+        'req.body.newPassword',
         'req.body.respondent',
         'req.body.questionnaireSnapshot',
         'req.body.answers',

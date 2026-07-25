@@ -3,18 +3,24 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import sensible from '@fastify/sensible';
 import swagger from '@fastify/swagger';
-import swaggerUi from '@fastify/swagger-ui';
 import type { TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
 import Fastify, { LogController, type FastifyInstance, type FastifyServerOptions } from 'fastify';
 import type { ApplicationServices } from './container.js';
+import {
+  adminAnalyticsRoutes,
+  driverPerformanceRoutes,
+} from './modules/analytics/analytics.routes.js';
 import { authRoutes } from './modules/auth/auth.routes.js';
 import { driverRoutes } from './modules/drivers/driver.routes.js';
+import { adminFeedbackRoutes } from './modules/feedback/admin-feedback.routes.js';
 import { feedbackRoutes } from './modules/feedback/feedback.routes.js';
 import { healthRoutes } from './modules/health/health.routes.js';
+import { adminProfileRoutes, driverProfileRoutes } from './modules/profiles/profile.routes.js';
 import {
   consentRoutes,
   questionnaireRoutes,
 } from './modules/questionnaires/questionnaire.routes.js';
+import { settingsRoutes } from './modules/settings/settings.routes.js';
 import { adminTripRoutes, driverTripRoutes } from './modules/trips/trip.routes.js';
 import { vehicleRoutes } from './modules/vehicles/vehicle.routes.js';
 import { vendorRoutes } from './modules/vendors/vendor.routes.js';
@@ -78,11 +84,17 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
           description: 'Passenger-safe feedback collection and synchronization',
         },
         { name: 'vendors', description: 'Outsourced-driver vendors' },
+        { name: 'agency settings', description: 'Agency-wide behavior and display settings' },
+        { name: 'feedback review', description: 'Administrator feedback inspection and review' },
+        { name: 'analytics', description: 'Administrator score and response analytics' },
+        { name: 'driver performance', description: 'Driver-safe aggregate performance' },
+        { name: 'profiles', description: 'Administrator and driver self-service profiles' },
       ],
     },
   });
 
   if (options.exposeDocs ?? true) {
+    const { default: swaggerUi } = await import('@fastify/swagger-ui');
     await app.register(swaggerUi, {
       routePrefix: '/docs',
       uiConfig: { docExpansion: 'list', deepLinking: false },
@@ -102,7 +114,6 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       guards: options.services.guards,
       cookieName: options.services.cookieName,
       secureCookie: options.services.secureCookie,
-      cookieMaxAgeSeconds: options.services.cookieMaxAgeSeconds,
     });
     await app.register(vendorRoutes, {
       prefix: '/api/v1/admin/vendors',
@@ -143,6 +154,38 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     await app.register(feedbackRoutes, {
       prefix: '/api/v1/passenger/feedback',
       feedbackService: options.services.feedbackService,
+    });
+    await app.register(settingsRoutes, {
+      prefix: '/api/v1/admin/settings',
+      guards: options.services.guards,
+      settingsService: options.services.settingsService,
+    });
+    await app.register(adminFeedbackRoutes, {
+      prefix: '/api/v1/admin/feedback',
+      guards: options.services.guards,
+      adminFeedbackService: options.services.adminFeedbackService,
+    });
+    await app.register(adminAnalyticsRoutes, {
+      prefix: '/api/v1/admin/analytics',
+      guards: options.services.guards,
+      analyticsService: options.services.analyticsService,
+    });
+    await app.register(driverPerformanceRoutes, {
+      prefix: '/api/v1/driver/performance',
+      guards: options.services.guards,
+      analyticsService: options.services.analyticsService,
+    });
+    await app.register(adminProfileRoutes, {
+      prefix: '/api/v1/admin/profile',
+      guards: options.services.guards,
+      profileService: options.services.profileService,
+      cookieName: options.services.cookieName,
+    });
+    await app.register(driverProfileRoutes, {
+      prefix: '/api/v1/driver/profile',
+      guards: options.services.guards,
+      profileService: options.services.profileService,
+      cookieName: options.services.cookieName,
     });
   }
 

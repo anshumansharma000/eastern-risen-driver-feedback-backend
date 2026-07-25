@@ -1,11 +1,14 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { AppError } from '../../shared/errors/app-error.js';
 import type { AuthRepository } from './auth.repository.js';
-import type { AuthAccount, AuthenticatedSession, AuthPrincipal } from './auth.types.js';
+import type { AuthAccount, AuthenticatedSession, SessionResolution } from './auth.types.js';
 import type { PasswordHasher } from './password.js';
 
 export interface AuthServiceOptions {
-  readonly sessionTtlHours: number;
+  readonly idleTtlHours: number;
+  readonly absoluteTtlDays: number;
+  readonly rotationIntervalHours: number;
+  readonly rotationGraceSeconds: number;
   readonly now?: () => Date;
 }
 
@@ -30,15 +33,43 @@ export class AuthService {
     return this.authenticate(account, password);
   }
 
-  async resolveSession(token: string | undefined): Promise<AuthPrincipal> {
+  async resolveSession(token: string | undefined): Promise<SessionResolution> {
     if (!token) throw this.unauthorized();
 
-    const principal = await this.repository.findPrincipalBySessionHash(
-      hashToken(token),
-      this.now(),
+    const now = this.now();
+    const presentedTokenHash = hashToken(token);
+    const session = await this.repository.findSessionByTokenHash(presentedTokenHash, now);
+    if (!session) throw this.unauthorized();
+
+    const rotationDueAt = new Date(
+      session.rotatedAt.getTime() + this.options.rotationIntervalHours * 60 * 60 * 1000,
     );
-    if (!principal) throw this.unauthorized();
-    return principal;
+    if (!session.matchedCurrentToken || rotationDueAt > now) {
+      return { principal: session.principal };
+    }
+
+    const renewedExpiresAt = earlierOf(
+      new Date(now.getTime() + this.options.idleTtlHours * 60 * 60 * 1000),
+      session.absoluteExpiresAt,
+    );
+    const previousTokenValidUntil = earlierOf(
+      new Date(now.getTime() + this.options.rotationGraceSeconds * 1000),
+      session.absoluteExpiresAt,
+    );
+    const renewedToken = randomToken();
+    const rotated = await this.repository.rotateSession(
+      session.id,
+      presentedTokenHash,
+      hashToken(renewedToken),
+      renewedExpiresAt,
+      previousTokenValidUntil,
+      now,
+    );
+
+    return {
+      principal: session.principal,
+      ...(rotated ? { renewal: { token: renewedToken, expiresAt: renewedExpiresAt } } : {}),
+    };
   }
 
   async logout(token: string | undefined): Promise<void> {
@@ -58,10 +89,21 @@ export class AuthService {
     if (!validPassword || account.status !== 'ACTIVE') throw this.invalidCredentials();
 
     const now = this.now();
-    const expiresAt = new Date(now.getTime() + this.options.sessionTtlHours * 60 * 60 * 1000);
-    const token = randomBytes(32).toString('base64url');
+    const absoluteExpiresAt = new Date(
+      now.getTime() + this.options.absoluteTtlDays * 24 * 60 * 60 * 1000,
+    );
+    const expiresAt = earlierOf(
+      new Date(now.getTime() + this.options.idleTtlHours * 60 * 60 * 1000),
+      absoluteExpiresAt,
+    );
+    const token = randomToken();
 
-    await this.repository.createSession(account.accountId, hashToken(token), expiresAt);
+    await this.repository.createSession(
+      account.accountId,
+      hashToken(token),
+      expiresAt,
+      absoluteExpiresAt,
+    );
     await this.repository.recordSuccessfulLogin(account.accountId, now);
 
     return {
@@ -95,4 +137,12 @@ export class AuthService {
 
 export function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
+}
+
+function randomToken(): string {
+  return randomBytes(32).toString('base64url');
+}
+
+function earlierOf(first: Date, second: Date): Date {
+  return first <= second ? first : second;
 }

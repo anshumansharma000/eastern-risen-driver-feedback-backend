@@ -63,8 +63,6 @@ Use route groups and layouts to enforce clear separation. Adapt exact paths to t
 /(auth)
   /admin/login
   /driver/login
-  /forgot-password
-  /reset-password
 
 /(driver)
   /driver
@@ -112,6 +110,16 @@ Not all listed admin modules have backend endpoints yet. Gate unfinished modules
 - Resolve the current principal through `/api/v1/auth/me` and enforce role-aware route guards on both server and client boundaries where appropriate.
 - On `401`, clear private client state and return to the correct login page. On `403`, show a safe access-denied state without revealing data.
 - Include loading, invalid-credential, deactivated-account, expired-session, and service-unavailable states.
+- Do not add public forgot-password or reset-link pages. A driver with a
+  forgotten password must contact an administrator. On the admin driver detail
+  page, submit `{ newPassword }` to
+  `POST /api/v1/admin/drivers/:id/password-reset`; HTTP 204 means success and
+  all existing driver sessions have been revoked.
+- Add admin and driver profile pages. Drivers may edit only display name, email,
+  and phone; show operational employment and assignment fields as read-only.
+- Self-service password changes require the current password. A successful HTTP
+  204 revokes all sessions, so clear private caches and return to the
+  role-specific login page.
 
 #### Driver
 
@@ -152,7 +160,9 @@ Not all listed admin modules have backend endpoints yet. Gate unfinished modules
 
 - Build a responsive desktop-first shell with a collapsible sidebar, clear page titles, breadcrumbs only where useful, global account controls, and mobile fallbacks.
 - Dashboard should prioritize overall rating, response count, rating trend, source comparison, and visibly surfaced negative feedback. Always display sample counts alongside averages.
-- Do not invent the negative-feedback rule while its threshold is TBD. Encapsulate the rule behind configuration and label placeholder behavior clearly.
+- Negative feedback uses the optional 1–5 threshold from agency settings. When
+  it is `null`, show “Not configured” and link admins to Settings; never render
+  the missing metric as zero.
 - Lists need URL-backed filters, pagination, sorting where supported, empty states, loading skeletons, recoverable error states, and archive/deactivation visibility.
 - Driver management supports agency and outsourced sources; outsourced drivers require a vendor.
 - Trip creation requires booking reference, passenger name, route, scheduled time, active vehicle, and active driver.
@@ -177,7 +187,7 @@ Not all listed admin modules have backend endpoints yet. Gate unfinished modules
 ### State, security, and privacy
 
 - Keep server state, local UI state, form state, and offline queue state conceptually separate.
-- Never log passwords, reset tokens, feedback access tokens, coupon codes, passenger contact details, questionnaire answers, or offline envelopes.
+- Never log passwords, feedback access tokens, coupon codes, passenger contact details, questionnaire answers, or offline envelopes.
 - Never expose passenger PII in driver screens, notifications, queue status, telemetry, URLs, or error trackers.
 - Do not place secrets or sensitive payloads in `localStorage`, query strings, server logs, or analytics events.
 - Clear passenger form state and in-memory context after confirmed submission/queueing and when the safe hand-back state begins.
