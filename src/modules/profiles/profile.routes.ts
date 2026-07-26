@@ -1,6 +1,6 @@
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import { Type } from 'typebox';
-import type { AuthGuards } from '../auth/auth.guard.js';
+import { sessionCookieClearOptions, type AuthGuards } from '../auth/auth.guard.js';
 import {
   adminProfileSchema,
   changePasswordBodySchema,
@@ -14,6 +14,7 @@ export interface ProfileRouteOptions {
   readonly guards: AuthGuards;
   readonly profileService: ProfileService;
   readonly cookieName: string;
+  readonly secureCookie: boolean;
 }
 
 export const adminProfileRoutes: FastifyPluginAsyncTypebox<ProfileRouteOptions> = async (
@@ -116,7 +117,7 @@ function registerChangePassword(
         request.body.currentPassword,
         request.body.newPassword,
       );
-      reply.clearCookie(options.cookieName, { path: '/' });
+      reply.clearCookie(options.cookieName, sessionCookieClearOptions(options.secureCookie));
       return reply.status(204).send(null);
     },
   );

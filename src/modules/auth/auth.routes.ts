@@ -6,7 +6,7 @@ import {
   driverLoginBodySchema,
   loginResponseSchema,
 } from './auth.schemas.js';
-import { sessionCookieOptions, type AuthGuards } from './auth.guard.js';
+import { sessionCookieClearOptions, sessionCookieOptions, type AuthGuards } from './auth.guard.js';
 
 export interface AuthRouteOptions {
   readonly authService: AuthService;
@@ -73,7 +73,7 @@ export const authRoutes: FastifyPluginAsyncTypebox<AuthRouteOptions> = async (ap
     },
     async (request, reply) => {
       await options.authService.logout(request.cookies[options.cookieName]);
-      reply.clearCookie(options.cookieName, { path: '/' });
+      reply.clearCookie(options.cookieName, sessionCookieClearOptions(options.secureCookie));
       return reply.status(204).send();
     },
   );

@@ -101,8 +101,10 @@ The password is hashed with Argon2id before insertion and is never printed.
 - `POST /api/v1/driver/profile/change-password`
 
 Authentication uses an opaque, database-backed session cookie. The cookie is
-`HttpOnly`, uses `SameSite=Lax`, and is marked `Secure` in production. The raw
-session token is never stored in PostgreSQL.
+`HttpOnly` and uses `SameSite=None; Secure` in production so separately hosted
+HTTPS frontends can make credentialed API requests. Local development uses
+`SameSite=Lax` without `Secure`. The raw session token is never stored in
+PostgreSQL.
 
 Sessions have a 72-hour inactivity timeout and a 30-day absolute lifetime by
 default. An active session rotates its token every 24 hours and renews the

@@ -65,8 +65,17 @@ export function sessionCookieOptions(secure: boolean, expiresAt: Date) {
   return {
     path: '/',
     httpOnly: true,
-    sameSite: 'lax' as const,
+    sameSite: secure ? ('none' as const) : ('lax' as const),
     secure,
     maxAge: Math.max(1, Math.ceil((expiresAt.getTime() - Date.now()) / 1000)),
+  };
+}
+
+export function sessionCookieClearOptions(secure: boolean) {
+  return {
+    path: '/',
+    httpOnly: true,
+    sameSite: secure ? ('none' as const) : ('lax' as const),
+    secure,
   };
 }

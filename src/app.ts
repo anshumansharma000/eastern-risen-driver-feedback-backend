@@ -180,12 +180,14 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       guards: options.services.guards,
       profileService: options.services.profileService,
       cookieName: options.services.cookieName,
+      secureCookie: options.services.secureCookie,
     });
     await app.register(driverProfileRoutes, {
       prefix: '/api/v1/driver/profile',
       guards: options.services.guards,
       profileService: options.services.profileService,
       cookieName: options.services.cookieName,
+      secureCookie: options.services.secureCookie,
     });
   }
 

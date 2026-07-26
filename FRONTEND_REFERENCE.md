@@ -211,7 +211,7 @@ Centralize enum-to-label, enum-to-icon, and enum-to-tone mappings. Icons must ha
 
 - Local API: `http://localhost:3000`
 - Development OpenAPI UI: `http://localhost:3000/docs`
-- Auth: opaque HttpOnly database-backed cookie, `SameSite=Lax`, secure in production
+- Auth: opaque HttpOnly database-backed cookie, `SameSite=None; Secure` in production
 - Browser session calls: `credentials: 'include'`
 - Resource success: `{ data: ... }`
 - Collection success: `{ data: [...], pagination: { page, pageSize, total } }`

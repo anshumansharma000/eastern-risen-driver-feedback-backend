@@ -53,6 +53,9 @@ fetch(url, {
 ```
 
 JavaScript cannot and must not read, copy, or persist the session cookie.
+Production cookies use `SameSite=None; Secure` to support a frontend and API on
+different sites. Every session-authenticated cross-origin request still needs
+`credentials: 'include'`.
 
 ### Passenger authorization
 
