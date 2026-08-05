@@ -65,6 +65,7 @@ Configure these application values:
 - `DATABASE_CA_CERT_BASE64` containing the base64 cluster CA certificate
 - `DATA_ENCRYPTION_KEY_BASE64` containing exactly 32 random bytes as base64
 - `FRONTEND_ORIGINS` containing only the exact HTTPS frontend origin or origins
+- `PASSENGER_FEEDBACK_URL` containing the public HTTPS passenger feedback form URL
 - `TRUST_PROXY_HOPS=1` initially, then verify the client IP and proxy chain
 - `LOG_LEVEL=info`
 - `DATABASE_MAX_CONNECTIONS=10`

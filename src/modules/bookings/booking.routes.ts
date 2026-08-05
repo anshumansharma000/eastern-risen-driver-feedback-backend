@@ -77,7 +77,13 @@ export const bookingRoutes: FastifyPluginAsyncTypebox<{
         options.bookingService.get(request.params.id),
         options.tripService.listForBooking(request.params.id),
       ]);
-      return { data: { ...presentBooking(booking), trips: trips.map(presentTrip) } };
+      return {
+        data: {
+          ...presentBooking(booking),
+          tripCount: trips.length,
+          trips: trips.map(presentTrip),
+        },
+      };
     },
   );
   app.patch(

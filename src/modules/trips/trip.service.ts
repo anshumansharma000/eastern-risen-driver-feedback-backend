@@ -113,11 +113,9 @@ export class TripService {
           `driver:${driverId}`,
           `vehicle:${vehicleId}`,
         ]);
-        const [booking, driver, vehicle] = await Promise.all([
-          this.resolveBooking(bookingId, tx),
-          this.resolveDriver(driverId, tx),
-          this.resolveVehicle(vehicleId, tx),
-        ]);
+        const booking = await this.resolveBooking(bookingId, tx);
+        const driver = await this.resolveDriver(driverId, tx);
+        const vehicle = await this.resolveVehicle(vehicleId, tx);
         await this.validateAssignment(tx, driver, vehicle.id, schedule, id);
         this.validateBookingPeriod(booking, schedule);
         const rows = await tx
@@ -255,11 +253,9 @@ export class TripService {
           `driver:${input.driverId}`,
           `vehicle:${input.vehicleId}`,
         ]);
-        const [booking, driver, vehicle] = await Promise.all([
-          this.resolveBooking(input.bookingId, tx),
-          this.resolveDriver(input.driverId, tx),
-          this.resolveVehicle(input.vehicleId, tx),
-        ]);
+        const booking = await this.resolveBooking(input.bookingId, tx);
+        const driver = await this.resolveDriver(input.driverId, tx);
+        const vehicle = await this.resolveVehicle(input.vehicleId, tx);
         this.validateBookingPeriod(booking, schedule);
         await this.validateAssignment(tx, driver, vehicle.id, schedule);
         const [created] = await tx
@@ -446,43 +442,41 @@ export class TripService {
       gt(trips.scheduledEndAt, schedule.scheduledAt),
       excludeCurrent,
     );
-    const [driverConflict, vehicleConflict, leave, assignedTrips] = await Promise.all([
-      database
-        .select({ id: trips.id })
-        .from(trips)
-        .where(and(overlap, eq(trips.driverId, driver.id)))
-        .limit(1),
-      database
-        .select({ id: trips.id })
-        .from(trips)
-        .where(and(overlap, eq(trips.vehicleId, vehicleId)))
-        .limit(1),
-      database
-        .select({ id: driverLeavePeriods.id })
-        .from(driverLeavePeriods)
-        .where(
-          and(
-            eq(driverLeavePeriods.driverId, driver.id),
-            lt(driverLeavePeriods.startsAt, schedule.scheduledEndAt),
-            gt(driverLeavePeriods.endsAt, schedule.scheduledAt),
-          ),
-        )
-        .limit(1),
-      database
-        .select({
-          id: trips.id,
-          scheduledAt: trips.scheduledAt,
-          scheduledEndAt: trips.scheduledEndAt,
-        })
-        .from(trips)
-        .where(
-          and(
-            eq(trips.driverId, driver.id),
-            activeTrip,
-            excludedTripId ? ne(trips.id, excludedTripId) : undefined,
-          ),
+    const driverConflict = await database
+      .select({ id: trips.id })
+      .from(trips)
+      .where(and(overlap, eq(trips.driverId, driver.id)))
+      .limit(1);
+    const vehicleConflict = await database
+      .select({ id: trips.id })
+      .from(trips)
+      .where(and(overlap, eq(trips.vehicleId, vehicleId)))
+      .limit(1);
+    const leave = await database
+      .select({ id: driverLeavePeriods.id })
+      .from(driverLeavePeriods)
+      .where(
+        and(
+          eq(driverLeavePeriods.driverId, driver.id),
+          lt(driverLeavePeriods.startsAt, schedule.scheduledEndAt),
+          gt(driverLeavePeriods.endsAt, schedule.scheduledAt),
         ),
-    ]);
+      )
+      .limit(1);
+    const assignedTrips = await database
+      .select({
+        id: trips.id,
+        scheduledAt: trips.scheduledAt,
+        scheduledEndAt: trips.scheduledEndAt,
+      })
+      .from(trips)
+      .where(
+        and(
+          eq(trips.driverId, driver.id),
+          activeTrip,
+          excludedTripId ? ne(trips.id, excludedTripId) : undefined,
+        ),
+      );
 
     if (driverConflict[0]) {
       throw new AppError({

@@ -34,6 +34,10 @@ envs:
     scope: RUN_TIME
     type: GENERAL
     value: https://CHANGE_ME_FRONTEND_ORIGIN
+  - key: PASSENGER_FEEDBACK_URL
+    scope: RUN_TIME
+    type: GENERAL
+    value: https://CHANGE_ME_FRONTEND_ORIGIN/feedback
   - key: LOG_LEVEL
     scope: RUN_TIME
     type: GENERAL
