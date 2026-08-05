@@ -2,6 +2,7 @@ import type { AppConfig } from './config/env.js';
 import type { AppDatabase } from './database/client.js';
 import { AnalyticsService } from './modules/analytics/analytics.service.js';
 import { AuthService } from './modules/auth/auth.service.js';
+import { BookingService } from './modules/bookings/booking.service.js';
 import { DrizzleAuthRepository } from './modules/auth/auth.repository.js';
 import { createAuthGuards, type AuthGuards } from './modules/auth/auth.guard.js';
 import { passwordHasher } from './modules/auth/password.js';
@@ -18,6 +19,7 @@ import { createFieldEncryptor } from './shared/security/field-encryption.js';
 
 export interface ApplicationServices {
   readonly authService: AuthService;
+  readonly bookingService: BookingService;
   readonly profileService: ProfileService;
   readonly analyticsService: AnalyticsService;
   readonly adminFeedbackService: AdminFeedbackService;
@@ -50,11 +52,13 @@ export function createApplicationServices(db: AppDatabase, config: AppConfig): A
     settingsService,
     encryptor,
     config.feedbackHandoffTtlHours,
+    config.passengerFeedbackUrl,
   );
   return {
     analyticsService: new AnalyticsService(db, settingsService),
     adminFeedbackService: new AdminFeedbackService(db, encryptor, settingsService),
     authService,
+    bookingService: new BookingService(db),
     profileService: new ProfileService(db, passwordHasher),
     guards: createAuthGuards(authService, config.sessionCookieName, secureCookie),
     driverService: new DriverService(db, passwordHasher),

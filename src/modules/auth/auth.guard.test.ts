@@ -7,11 +7,13 @@ describe('session cookie options', () => {
       httpOnly: true,
       sameSite: 'none',
       secure: true,
+      partitioned: true,
     });
     expect(sessionCookieClearOptions(true)).toMatchObject({
       httpOnly: true,
       sameSite: 'none',
       secure: true,
+      partitioned: true,
     });
   });
 
@@ -19,10 +21,12 @@ describe('session cookie options', () => {
     expect(sessionCookieOptions(false, new Date(Date.now() + 60_000))).toMatchObject({
       sameSite: 'lax',
       secure: false,
+      partitioned: false,
     });
     expect(sessionCookieClearOptions(false)).toMatchObject({
       sameSite: 'lax',
       secure: false,
+      partitioned: false,
     });
   });
 });

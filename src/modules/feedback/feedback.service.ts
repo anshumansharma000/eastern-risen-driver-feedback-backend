@@ -1,11 +1,12 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, getTableColumns, sql } from 'drizzle-orm';
 import type { AppDatabase } from '../../database/client.js';
 import {
   feedbackAnswers,
   feedbackHandoffs,
   feedbackSubmissions,
+  bookings,
   trips,
 } from '../../database/schema/index.js';
 import { isPostgresError } from '../../shared/database/postgres-error.js';
@@ -40,6 +41,7 @@ export class FeedbackService {
     private readonly settings: SettingsService,
     private readonly encryptor: FieldEncryptor,
     private readonly handoffTtlHours: number,
+    private readonly passengerFeedbackUrl: string,
     private readonly now: () => Date = () => new Date(),
   ) {}
 
@@ -53,7 +55,7 @@ export class FeedbackService {
         .where(eq(feedbackSubmissions.tripId, tripId))
         .limit(1);
       const [trip] = await tx.select().from(trips).where(eq(trips.id, tripId)).limit(1);
-      if (existingSubmission || trip?.status !== 'FEEDBACK_STARTED') {
+      if (existingSubmission || (trip?.status !== 'READY' && trip?.status !== 'FEEDBACK_STARTED')) {
         throw new AppError({
           code: 'FEEDBACK_HANDOFF_UNAVAILABLE',
           message: 'Passenger feedback is unavailable for this trip',
@@ -68,10 +70,12 @@ export class FeedbackService {
         .limit(1);
       const now = this.now();
       if (existingHandoff && !existingHandoff.consumedAt && existingHandoff.expiresAt > now) {
+        const token = this.encryptor.decrypt(existingHandoff.tokenCiphertext);
         return {
           tripId,
-          token: this.encryptor.decrypt(existingHandoff.tokenCiphertext),
+          token,
           expiresAt: existingHandoff.expiresAt,
+          link: this.buildHandoffLink(token),
         };
       }
 
@@ -107,7 +111,7 @@ export class FeedbackService {
         });
       }
 
-      return { tripId, token, expiresAt };
+      return { tripId, token, expiresAt, link: this.buildHandoffLink(token) };
     });
   }
 
@@ -119,8 +123,96 @@ export class FeedbackService {
       this.settings.get(),
     ]);
     const consent = await this.questionnaires.getConsentById(handoff.consentVersionId);
-    if (trip.status !== 'FEEDBACK_STARTED') this.invalidHandoff();
+    if (trip.status !== 'READY' && trip.status !== 'FEEDBACK_STARTED') this.invalidHandoff();
     return { trip, version, consent, settings, snapshot: buildQuestionnaireSnapshot(version) };
+  }
+
+  async start(token: string) {
+    if (!token) this.invalidHandoff();
+    const tokenHash = hashToken(token);
+    return this.db.transaction(async (tx) => {
+      const [candidate] = await tx
+        .select()
+        .from(feedbackHandoffs)
+        .where(eq(feedbackHandoffs.tokenHash, tokenHash))
+        .limit(1);
+      if (!candidate) this.invalidHandoff();
+
+      // Share the trip-scoped lock used by handoff issuance so token replacement
+      // and concurrent passenger starts cannot observe each other halfway through.
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${candidate.tripId}, 0))`);
+      const [handoff] = await tx
+        .select()
+        .from(feedbackHandoffs)
+        .where(eq(feedbackHandoffs.tokenHash, tokenHash))
+        .limit(1);
+      if (!handoff || handoff.consumedAt || handoff.expiresAt <= this.now()) {
+        this.invalidHandoff();
+      }
+
+      const [trip] = await tx
+        .select({
+          id: trips.id,
+          status: trips.status,
+          startedFeedbackAt: trips.startedFeedbackAt,
+        })
+        .from(trips)
+        .where(eq(trips.id, handoff.tripId))
+        .limit(1);
+      if (!trip) {
+        throw new AppError({
+          code: 'TRIP_NOT_FOUND',
+          message: 'Trip was not found',
+          statusCode: 404,
+        });
+      }
+
+      if (trip.status === 'FEEDBACK_STARTED') {
+        if (trip.startedFeedbackAt) {
+          return {
+            tripId: trip.id,
+            status: trip.status,
+            startedFeedbackAt: trip.startedFeedbackAt,
+          };
+        }
+        const now = this.now();
+        const [repaired] = await tx
+          .update(trips)
+          .set({ startedFeedbackAt: now, updatedAt: now })
+          .where(and(eq(trips.id, trip.id), eq(trips.status, 'FEEDBACK_STARTED')))
+          .returning({
+            tripId: trips.id,
+            status: trips.status,
+            startedFeedbackAt: trips.startedFeedbackAt,
+          });
+        if (repaired?.startedFeedbackAt) {
+          return {
+            tripId: repaired.tripId,
+            status: 'FEEDBACK_STARTED' as const,
+            startedFeedbackAt: repaired.startedFeedbackAt,
+          };
+        }
+        this.unavailableHandoff();
+      }
+      if (trip.status !== 'READY') this.unavailableHandoff();
+
+      const now = this.now();
+      const [started] = await tx
+        .update(trips)
+        .set({ status: 'FEEDBACK_STARTED', startedFeedbackAt: now, updatedAt: now })
+        .where(and(eq(trips.id, trip.id), eq(trips.status, 'READY')))
+        .returning({
+          tripId: trips.id,
+          status: trips.status,
+          startedFeedbackAt: trips.startedFeedbackAt,
+        });
+      if (!started?.startedFeedbackAt) this.unavailableHandoff();
+      return {
+        tripId: started.tripId,
+        status: 'FEEDBACK_STARTED' as const,
+        startedFeedbackAt: started.startedFeedbackAt,
+      };
+    });
   }
 
   async submit(token: string, input: SubmitFeedbackInput) {
@@ -161,7 +253,7 @@ export class FeedbackService {
       this.getTrip(handoff.tripId),
       this.questionnaires.getVersionById(handoff.questionnaireVersionId),
     ]);
-    if (trip.status !== 'FEEDBACK_STARTED') this.invalidHandoff();
+    if (trip.status !== 'FEEDBACK_STARTED') this.unavailableHandoff();
     if (
       input.respondent.bookingReference.trim().toLowerCase() !==
       trip.bookingReference.trim().toLowerCase()
@@ -267,7 +359,12 @@ export class FeedbackService {
   }
 
   private async getTrip(id: string) {
-    const [trip] = await this.db.select().from(trips).where(eq(trips.id, id)).limit(1);
+    const [trip] = await this.db
+      .select({ ...getTableColumns(trips), bookingReference: bookings.bookingReference })
+      .from(trips)
+      .innerJoin(bookings, eq(bookings.id, trips.bookingId))
+      .where(eq(trips.id, id))
+      .limit(1);
     if (!trip)
       throw new AppError({
         code: 'TRIP_NOT_FOUND',
@@ -283,6 +380,20 @@ export class FeedbackService {
       message: 'The feedback handoff is invalid or expired',
       statusCode: 401,
     });
+  }
+
+  private unavailableHandoff(): never {
+    throw new AppError({
+      code: 'FEEDBACK_HANDOFF_UNAVAILABLE',
+      message: 'Passenger feedback is unavailable for this trip',
+      statusCode: 409,
+    });
+  }
+
+  private buildHandoffLink(token: string): string {
+    const link = new URL(this.passengerFeedbackUrl);
+    link.searchParams.set('token', token);
+    return link.toString();
   }
 }
 

@@ -5,6 +5,7 @@ import {
   authAccounts,
   authSessions,
   driverLeavePeriods,
+  driverLicenses,
   drivers,
   vendors,
 } from '../../database/schema/index.js';
@@ -26,6 +27,7 @@ export interface CreateDriverInput {
   readonly shiftEndTime?: string | null;
   readonly timeZone?: string;
   readonly maxDailyDutyMinutes?: number;
+  readonly license?: DriverLicenseInput;
 }
 
 export interface ListDriversInput {
@@ -46,6 +48,16 @@ export interface UpdateDriverInput {
   readonly shiftEndTime?: string | null;
   readonly timeZone?: string;
   readonly maxDailyDutyMinutes?: number;
+  readonly license?: DriverLicenseInput;
+}
+
+export interface DriverLicenseInput {
+  readonly licenseNumber?: string | null;
+  readonly issuedOn?: string | null;
+  readonly expiresOn?: string | null;
+  readonly issuingAuthority?: string | null;
+  readonly categories?: readonly string[] | null;
+  readonly verifiedAt?: string | null;
 }
 
 export interface CreateDriverLeaveInput {
@@ -74,6 +86,15 @@ const driverSelection = {
   shiftEndTime: drivers.shiftEndTime,
   timeZone: drivers.timeZone,
   maxDailyDutyMinutes: drivers.maxDailyDutyMinutes,
+  license: {
+    id: driverLicenses.id,
+    licenseNumber: driverLicenses.licenseNumber,
+    issuedOn: driverLicenses.issuedOn,
+    expiresOn: driverLicenses.expiresOn,
+    issuingAuthority: driverLicenses.issuingAuthority,
+    categories: driverLicenses.categories,
+    verifiedAt: driverLicenses.verifiedAt,
+  },
   status: authAccounts.status,
   createdAt: drivers.createdAt,
   updatedAt: drivers.updatedAt,
@@ -87,13 +108,14 @@ export class DriverService {
   ) {}
 
   async create(input: CreateDriverInput, actorAccountId: string) {
-    const vendorName = await this.resolveVendorName(input.sourceType, input.vendorId);
+    await this.resolveVendorName(input.sourceType, input.vendorId);
     validateScheduleSettings(input.shiftStartTime, input.shiftEndTime, input.timeZone);
+    validateLicense(input.license);
 
     const passwordHash = await this.passwords.hash(input.password);
 
     try {
-      return await this.db.transaction(async (tx) => {
+      const driverId = await this.db.transaction(async (tx) => {
         const [account] = await tx
           .insert(authAccounts)
           .values({
@@ -120,6 +142,13 @@ export class DriverService {
           })
           .returning();
 
+        if (input.license) {
+          await tx.insert(driverLicenses).values({
+            driverId: driver!.id,
+            ...licenseValues(input.license),
+          });
+        }
+
         await tx.insert(auditEvents).values({
           actorAccountId,
           action: 'DRIVER_CREATED',
@@ -131,15 +160,9 @@ export class DriverService {
           },
         });
 
-        return {
-          ...driver!,
-          displayName: input.displayName.trim(),
-          email: input.email.trim().toLowerCase(),
-          vendorName,
-          status: 'ACTIVE' as const,
-          archivedAt: null,
-        };
+        return driver!.id;
       });
+      return await this.get(driverId);
     } catch (error) {
       if (isPostgresError(error, '23505')) {
         const driverCodeConflict = error.constraint === 'drivers_code_unique';
@@ -164,9 +187,12 @@ export class DriverService {
         shiftStartTime: drivers.shiftStartTime,
         shiftEndTime: drivers.shiftEndTime,
         timeZone: drivers.timeZone,
+        licenseIssuedOn: driverLicenses.issuedOn,
+        licenseExpiresOn: driverLicenses.expiresOn,
       })
       .from(drivers)
       .innerJoin(authAccounts, eq(authAccounts.id, drivers.accountId))
+      .leftJoin(driverLicenses, eq(driverLicenses.driverId, drivers.id))
       .where(eq(drivers.id, id))
       .limit(1);
     if (!current) {
@@ -184,6 +210,21 @@ export class DriverService {
       input.shiftStartTime !== undefined ? input.shiftStartTime : current.shiftStartTime,
       input.shiftEndTime !== undefined ? input.shiftEndTime : current.shiftEndTime,
       input.timeZone ?? current.timeZone,
+    );
+    validateLicense(
+      input.license
+        ? {
+            ...input.license,
+            issuedOn:
+              input.license.issuedOn !== undefined
+                ? input.license.issuedOn
+                : current.licenseIssuedOn,
+            expiresOn:
+              input.license.expiresOn !== undefined
+                ? input.license.expiresOn
+                : current.licenseExpiresOn,
+          }
+        : undefined,
     );
 
     try {
@@ -218,6 +259,16 @@ export class DriverService {
           })
           .where(eq(drivers.id, id));
 
+        if (input.license) {
+          await tx
+            .insert(driverLicenses)
+            .values({ driverId: id, ...licenseValues(input.license) })
+            .onConflictDoUpdate({
+              target: driverLicenses.driverId,
+              set: { ...licenseValues(input.license), updatedAt: new Date() },
+            });
+        }
+
         await tx.insert(auditEvents).values({
           actorAccountId,
           action: 'DRIVER_UPDATED',
@@ -231,6 +282,7 @@ export class DriverService {
           .from(drivers)
           .innerJoin(authAccounts, eq(authAccounts.id, drivers.accountId))
           .leftJoin(vendors, eq(vendors.id, drivers.vendorId))
+          .leftJoin(driverLicenses, eq(driverLicenses.driverId, drivers.id))
           .where(eq(drivers.id, id))
           .limit(1);
         return driver!;
@@ -256,6 +308,7 @@ export class DriverService {
       .from(drivers)
       .innerJoin(authAccounts, eq(authAccounts.id, drivers.accountId))
       .leftJoin(vendors, eq(vendors.id, drivers.vendorId))
+      .leftJoin(driverLicenses, eq(driverLicenses.driverId, drivers.id))
       .where(eq(drivers.id, id))
       .limit(1);
     if (!driver) {
@@ -278,9 +331,13 @@ export class DriverService {
       .from(drivers)
       .innerJoin(authAccounts, eq(authAccounts.id, drivers.accountId))
       .leftJoin(vendors, eq(vendors.id, drivers.vendorId));
+    const baseJoinWithLicense = baseJoin.leftJoin(
+      driverLicenses,
+      eq(driverLicenses.driverId, drivers.id),
+    );
 
     const [items, [total]] = await Promise.all([
-      baseJoin
+      baseJoinWithLicense
         .where(filter)
         .orderBy(asc(authAccounts.displayName), asc(drivers.id))
         .limit(input.pageSize)
@@ -375,6 +432,7 @@ export class DriverService {
         .from(drivers)
         .innerJoin(authAccounts, eq(authAccounts.id, drivers.accountId))
         .leftJoin(vendors, eq(vendors.id, drivers.vendorId))
+        .leftJoin(driverLicenses, eq(driverLicenses.driverId, drivers.id))
         .where(eq(drivers.id, id))
         .limit(1);
       return driver!;
@@ -526,4 +584,34 @@ function validateScheduleSettings(
       statusCode: 400,
     });
   }
+}
+
+function validateLicense(license: DriverLicenseInput | undefined) {
+  if (!license?.issuedOn || !license.expiresOn) return;
+  if (license.expiresOn <= license.issuedOn) {
+    throw new AppError({
+      code: 'INVALID_DRIVER_LICENSE_PERIOD',
+      message: 'License expiry date must be after its issue date',
+      statusCode: 400,
+    });
+  }
+}
+
+function licenseValues(input: DriverLicenseInput) {
+  return {
+    ...(input.licenseNumber !== undefined
+      ? { licenseNumber: input.licenseNumber?.trim() || null }
+      : {}),
+    ...(input.issuedOn !== undefined ? { issuedOn: input.issuedOn } : {}),
+    ...(input.expiresOn !== undefined ? { expiresOn: input.expiresOn } : {}),
+    ...(input.issuingAuthority !== undefined
+      ? { issuingAuthority: input.issuingAuthority?.trim() || null }
+      : {}),
+    ...(input.categories !== undefined
+      ? { categories: input.categories ? [...input.categories] : null }
+      : {}),
+    ...(input.verifiedAt !== undefined
+      ? { verifiedAt: input.verifiedAt ? new Date(input.verifiedAt) : null }
+      : {}),
+  };
 }

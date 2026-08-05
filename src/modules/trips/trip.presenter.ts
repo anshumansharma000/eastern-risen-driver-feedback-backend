@@ -1,5 +1,6 @@
 export interface TripView {
   readonly id: string;
+  readonly bookingId: string;
   readonly bookingReference: string;
   readonly passengerName: string;
   readonly pickupLocation: string;
@@ -25,8 +26,11 @@ export interface TripView {
 export function presentTrip(trip: TripView) {
   return {
     id: trip.id,
-    bookingReference: trip.bookingReference,
-    passengerName: trip.passengerName,
+    booking: {
+      id: trip.bookingId,
+      bookingReference: trip.bookingReference,
+      passengerName: trip.passengerName,
+    },
     pickupLocation: trip.pickupLocation,
     destination: trip.destination,
     scheduledAt: trip.scheduledAt.toISOString(),

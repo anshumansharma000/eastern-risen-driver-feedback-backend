@@ -8,6 +8,7 @@ import { createDatabaseClient, type DatabaseClient } from '../src/database/clien
 import {
   auditEvents,
   authAccounts,
+  bookings,
   drivers,
   consentVersions,
   feedbackAnswers,
@@ -34,6 +35,7 @@ integration('vehicle and trip APIs', () => {
   let otherDriverId: string;
   let vehicleId: string;
   let businessVehicleId: string;
+  let bookingId: string;
   let questionnaireId: string;
   let questionnaireVersionId: string;
   let consentVersionId: string;
@@ -63,6 +65,17 @@ integration('vehicle and trip APIs', () => {
       })
       .returning({ id: authAccounts.id });
     adminAccountId = admin!.id;
+    const [booking] = await database.db
+      .insert(bookings)
+      .values({
+        bookingReference: `BOOK-${suffix}`,
+        passengerName: 'Integration Passenger',
+        startsAt: new Date('2029-01-01T00:00:00.000Z'),
+        endsAt: new Date('2033-01-01T00:00:00.000Z'),
+        createdByAccountId: adminAccountId,
+      })
+      .returning({ id: bookings.id });
+    bookingId = booking!.id;
 
     const [driverAccount] = await database.db
       .insert(authAccounts)
@@ -128,6 +141,7 @@ integration('vehicle and trip APIs', () => {
       .where(
         inArray(trips.createdByAccountId, [adminAccountId, driverAccountId, otherDriverAccountId]),
       );
+    await database.db.delete(bookings).where(eq(bookings.id, bookingId));
     if (questionnaireId) {
       await database.db
         .delete(questionnaireVersions)
@@ -157,6 +171,21 @@ integration('vehicle and trip APIs', () => {
 
   it('manages vehicles and the admin-assigned trip lifecycle', async () => {
     const adminCookie = await login('/api/v1/auth/admin/login', { email: adminEmail, password });
+    const bookingResponse = await app.inject({
+      method: 'GET',
+      url: `/api/v1/admin/bookings/${bookingId}`,
+      headers: { cookie: adminCookie },
+    });
+    expect(bookingResponse.statusCode, bookingResponse.body).toBe(200);
+    expect(bookingResponse.json()).toMatchObject({
+      data: {
+        id: bookingId,
+        bookingReference: `BOOK-${suffix}`,
+        passengerName: 'Integration Passenger',
+        tripCount: 0,
+        trips: [],
+      },
+    });
     const vehicleResponse = await app.inject({
       method: 'POST',
       url: '/api/v1/admin/vehicles',
@@ -328,11 +357,20 @@ integration('vehicle and trip APIs', () => {
     const tripId = tripResponse.json<{ data: { id: string } }>().data.id;
     expect(tripResponse.json()).toMatchObject({
       data: {
+        booking: { id: bookingId, bookingReference: `BOOK-${suffix}` },
         creationSource: 'ADMIN_ASSIGNED',
         status: 'READY',
         vehicle: { displayName: 'Updated Crysta' },
         driver: { id: driverId, sourceType: 'AGENCY' },
       },
+    });
+    const bookingWithTrip = await app.inject({
+      method: 'GET',
+      url: `/api/v1/admin/bookings/${bookingId}`,
+      headers: { cookie: adminCookie },
+    });
+    expect(bookingWithTrip.json()).toMatchObject({
+      data: { tripCount: 1, trips: [{ id: tripId }] },
     });
 
     const driverCookie = await login('/api/v1/auth/driver/login', { driverCode, password });
@@ -355,13 +393,96 @@ integration('vehicle and trip APIs', () => {
     });
     expect(forbiddenByOwnership.statusCode).toBe(404);
 
-    const start = await app.inject({
+    const [adminFeedbackLink, driverFeedbackLink, otherDriverFeedbackLink] = await Promise.all([
+      app.inject({
+        method: 'GET',
+        url: `/api/v1/admin/trips/${tripId}/feedback-link`,
+        headers: { cookie: adminCookie },
+      }),
+      app.inject({
+        method: 'GET',
+        url: `/api/v1/driver/trips/${tripId}/feedback-link`,
+        headers: { cookie: driverCookie },
+      }),
+      app.inject({
+        method: 'GET',
+        url: `/api/v1/driver/trips/${tripId}/feedback-link`,
+        headers: { cookie: otherCookie },
+      }),
+    ]);
+    expect(adminFeedbackLink.statusCode, adminFeedbackLink.body).toBe(200);
+    expect(driverFeedbackLink.statusCode, driverFeedbackLink.body).toBe(200);
+    expect(otherDriverFeedbackLink.statusCode).toBe(404);
+    const otherDriverPreparation = await app.inject({
+      method: 'POST',
+      url: `/api/v1/driver/trips/${tripId}/start-feedback`,
+      headers: { cookie: otherCookie },
+    });
+    expect(otherDriverPreparation.statusCode).toBe(404);
+    const adminLinkData = adminFeedbackLink.json<{
+      data: { tripId: string; feedbackLink: string; feedbackAccessTokenExpiresAt: string };
+    }>().data;
+    expect(adminLinkData.feedbackLink).toMatch(/^http:\/\/localhost:3001\/feedback\?token=/);
+    expect(driverFeedbackLink.json()).toEqual({ data: adminLinkData });
+    expect(adminFeedbackLink.json()).not.toHaveProperty('data.feedbackAccessToken');
+    expect(driverFeedbackLink.json()).not.toHaveProperty('data.feedbackAccessToken');
+
+    const handoffPreparation = await app.inject({
       method: 'POST',
       url: `/api/v1/driver/trips/${tripId}/start-feedback`,
       headers: { cookie: driverCookie },
     });
-    expect(start.statusCode).toBe(200);
-    expect(start.json()).toMatchObject({ data: { status: 'FEEDBACK_STARTED' } });
+    expect(handoffPreparation.statusCode).toBe(200);
+    const prepared = handoffPreparation.json<{
+      data: {
+        status: string;
+        startedFeedbackAt: string | null;
+        feedbackAccessToken: string;
+        feedbackLink: string;
+      };
+    }>().data;
+    expect(prepared).toMatchObject({
+      status: 'READY',
+      startedFeedbackAt: null,
+      feedbackLink: adminLinkData.feedbackLink,
+    });
+    expect(new URL(prepared.feedbackLink).searchParams.get('token')).toBe(
+      prepared.feedbackAccessToken,
+    );
+
+    const context = await app.inject({
+      method: 'GET',
+      url: '/api/v1/passenger/feedback/context',
+      headers: { authorization: `Bearer ${prepared.feedbackAccessToken}` },
+    });
+    expect(context.statusCode, context.body).toBe(200);
+    const [readyTrip] = await database.db
+      .select({ status: trips.status, startedFeedbackAt: trips.startedFeedbackAt })
+      .from(trips)
+      .where(eq(trips.id, tripId));
+    expect(readyTrip).toEqual({ status: 'READY', startedFeedbackAt: null });
+
+    const passengerStart = await app.inject({
+      method: 'POST',
+      url: '/api/v1/passenger/feedback/start',
+      headers: { authorization: `Bearer ${prepared.feedbackAccessToken}` },
+    });
+    expect(passengerStart.statusCode, passengerStart.body).toBe(200);
+    expect(passengerStart.json()).toMatchObject({
+      data: { tripId, status: 'FEEDBACK_STARTED' },
+    });
+    expect(
+      Date.parse(
+        passengerStart.json<{ data: { startedFeedbackAt: string } }>().data.startedFeedbackAt,
+      ),
+    ).not.toBeNaN();
+    const startedFeedbackLink = await app.inject({
+      method: 'GET',
+      url: `/api/v1/driver/trips/${tripId}/feedback-link`,
+      headers: { cookie: driverCookie },
+    });
+    expect(startedFeedbackLink.statusCode, startedFeedbackLink.body).toBe(200);
+    expect(startedFeedbackLink.json()).toEqual({ data: adminLinkData });
 
     const noLongerEditable = await app.inject({
       method: 'PATCH',
@@ -378,6 +499,15 @@ integration('vehicle and trip APIs', () => {
     });
     expect(archived.statusCode).toBe(200);
     expect(archived.json()).toMatchObject({ data: { status: 'ARCHIVED' } });
+    const startArchived = await app.inject({
+      method: 'POST',
+      url: '/api/v1/passenger/feedback/start',
+      headers: { authorization: `Bearer ${prepared.feedbackAccessToken}` },
+    });
+    expect(startArchived.statusCode).toBe(409);
+    expect(startArchived.json()).toMatchObject({
+      error: { code: 'FEEDBACK_HANDOFF_UNAVAILABLE' },
+    });
   }, 20_000);
 
   it('enforces trip assignment availability and scheduling rules', async () => {
@@ -393,7 +523,6 @@ integration('vehicle and trip APIs', () => {
 
     const base = {
       ...tripPayload(driverId),
-      bookingReference: `RULE-${suffix}`,
       scheduledAt: '2031-08-10T04:30:00.000Z',
       scheduledEndAt: '2031-08-10T05:30:00.000Z',
     };
@@ -407,22 +536,20 @@ integration('vehicle and trip APIs', () => {
 
     expect((await create(base)).statusCode).toBe(201);
 
-    const duplicate = await create({
+    const anotherTripInBooking = await create({
       ...base,
-      bookingReference: base.bookingReference.toLowerCase(),
       driverId: otherDriverId,
       vehicleId: businessVehicleId,
       scheduledAt: '2031-08-10T07:00:00.000Z',
       scheduledEndAt: '2031-08-10T08:00:00.000Z',
     });
-    expect(duplicate.statusCode).toBe(409);
-    expect(duplicate.json()).toMatchObject({
-      error: { code: 'TRIP_BOOKING_REFERENCE_ALREADY_EXISTS' },
+    expect(anotherTripInBooking.statusCode).toBe(201);
+    expect(anotherTripInBooking.json()).toMatchObject({
+      data: { booking: { id: bookingId } },
     });
 
     const driverConflict = await create({
       ...base,
-      bookingReference: `DRIVER-CONFLICT-${suffix}`,
       vehicleId: businessVehicleId,
     });
     expect(driverConflict.statusCode).toBe(409);
@@ -432,7 +559,6 @@ integration('vehicle and trip APIs', () => {
 
     const vehicleConflict = await create({
       ...base,
-      bookingReference: `VEHICLE-CONFLICT-${suffix}`,
       driverId: otherDriverId,
     });
     expect(vehicleConflict.statusCode).toBe(409);
@@ -442,7 +568,6 @@ integration('vehicle and trip APIs', () => {
 
     const past = await create({
       ...base,
-      bookingReference: `PAST-${suffix}`,
       scheduledAt: '2020-01-01T04:30:00.000Z',
       scheduledEndAt: '2020-01-01T05:30:00.000Z',
     });
@@ -453,7 +578,6 @@ integration('vehicle and trip APIs', () => {
 
     const sameLocation = await create({
       ...base,
-      bookingReference: `LOCATION-${suffix}`,
       pickupLocation: '  Kolkata   Airport ',
       destination: 'kolkata airport',
       scheduledAt: '2031-08-11T04:30:00.000Z',
@@ -473,7 +597,6 @@ integration('vehicle and trip APIs', () => {
     expect(availabilityUpdate.statusCode).toBe(200);
     const unavailable = await create({
       ...base,
-      bookingReference: `UNAVAILABLE-${suffix}`,
       scheduledAt: '2031-08-11T04:30:00.000Z',
       scheduledEndAt: '2031-08-11T05:30:00.000Z',
     });
@@ -512,7 +635,6 @@ integration('vehicle and trip APIs', () => {
     });
     const onLeave = await create({
       ...base,
-      bookingReference: `LEAVE-${suffix}`,
       scheduledAt: '2031-08-11T04:30:00.000Z',
       scheduledEndAt: '2031-08-11T05:30:00.000Z',
     });
@@ -541,7 +663,6 @@ integration('vehicle and trip APIs', () => {
     expect(shiftUpdate.statusCode).toBe(200);
     const outsideShift = await create({
       ...base,
-      bookingReference: `SHIFT-${suffix}`,
       scheduledAt: '2031-08-12T03:30:00.000Z',
       scheduledEndAt: '2031-08-12T04:30:00.000Z',
     });
@@ -562,7 +683,6 @@ integration('vehicle and trip APIs', () => {
     });
     const dutyLimit = await create({
       ...base,
-      bookingReference: `DUTY-${suffix}`,
       vehicleId: businessVehicleId,
       scheduledAt: '2031-08-10T05:30:00.000Z',
       scheduledEndAt: '2031-08-10T06:15:00.000Z',
@@ -606,8 +726,7 @@ integration('vehicle and trip APIs', () => {
       url: '/api/v1/driver/trips',
       headers: { cookie: driverCookie },
       payload: {
-        bookingReference: `${payload.bookingReference}-SELF`,
-        passengerName: payload.passengerName,
+        bookingId: payload.bookingId,
         pickupLocation: payload.pickupLocation,
         destination: payload.destination,
         scheduledAt: payload.scheduledAt,
@@ -640,6 +759,12 @@ integration('vehicle and trip APIs', () => {
     expect(new Set(accessTokens).size).toBe(1);
     const accessToken = accessTokens[0]!;
 
+    const [preparedTrip] = await database.db
+      .select({ status: trips.status, startedFeedbackAt: trips.startedFeedbackAt })
+      .from(trips)
+      .where(eq(trips.id, selfTripId));
+    expect(preparedTrip).toEqual({ status: 'READY', startedFeedbackAt: null });
+
     const context = await app.inject({
       method: 'GET',
       url: '/api/v1/passenger/feedback/context',
@@ -657,6 +782,7 @@ integration('vehicle and trip APIs', () => {
           questionnaireVersionId: string;
           questions: { id: string; stableKey: string }[];
         };
+        consent: { id: string };
       };
     }>().data;
     expect(contextData.questionnaire.questionnaireVersionId).toBe(questionnaireVersionId);
@@ -665,6 +791,22 @@ integration('vehicle and trip APIs', () => {
       agencyName: 'Eastern Risen Test',
       timezone: 'Asia/Kolkata',
       thankYouMessage: 'Thank you from the integration test.',
+    });
+    const [tripAfterContext] = await database.db
+      .select({ status: trips.status, startedFeedbackAt: trips.startedFeedbackAt })
+      .from(trips)
+      .where(eq(trips.id, selfTripId));
+    expect(tripAfterContext).toEqual({ status: 'READY', startedFeedbackAt: null });
+    const [pinnedVersions] = await database.db
+      .select({
+        questionnaireVersionId: feedbackHandoffs.questionnaireVersionId,
+        consentVersionId: feedbackHandoffs.consentVersionId,
+      })
+      .from(feedbackHandoffs)
+      .where(eq(feedbackHandoffs.tripId, selfTripId));
+    expect(pinnedVersions).toEqual({
+      questionnaireVersionId: contextData.questionnaire.questionnaireVersionId,
+      consentVersionId: contextData.consent.id,
     });
     const questionId = (stableKey: string) =>
       contextData.questionnaire.questions.find((question) => question.stableKey === stableKey)!.id;
@@ -678,7 +820,7 @@ integration('vehicle and trip APIs', () => {
         name: 'Passenger One',
         phone: '+91-9876543210',
         email: 'passenger@example.com',
-        bookingReference: `${payload.bookingReference}-SELF`,
+        bookingReference: `BOOK-${suffix}`,
         consentAccepted: true,
         consentedAt: '2026-08-10T06:30:00.000Z',
       },
@@ -690,6 +832,55 @@ integration('vehicle and trip APIs', () => {
       submittedAt: '2026-08-10T06:31:00.000Z',
       submissionMode: 'OFFLINE_SYNC',
     };
+
+    const submittedBeforeStart = await app.inject({
+      method: 'POST',
+      url: '/api/v1/passenger/feedback/submissions',
+      headers: { authorization: `Bearer ${accessToken}` },
+      payload: submissionPayload,
+    });
+    expect(submittedBeforeStart.statusCode).toBe(409);
+    expect(submittedBeforeStart.json()).toMatchObject({
+      error: { code: 'FEEDBACK_HANDOFF_UNAVAILABLE' },
+    });
+    const [handoffBeforeStart] = await database.db
+      .select({ consumedAt: feedbackHandoffs.consumedAt })
+      .from(feedbackHandoffs)
+      .where(eq(feedbackHandoffs.tripId, selfTripId));
+    expect(handoffBeforeStart?.consumedAt).toBeNull();
+
+    const passengerStarts = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        app.inject({
+          method: 'POST',
+          url: '/api/v1/passenger/feedback/start',
+          headers: { authorization: `Bearer ${accessToken}` },
+        }),
+      ),
+    );
+    expect(passengerStarts.map((response) => response.statusCode)).toEqual([
+      200, 200, 200, 200, 200,
+    ]);
+    const passengerStartData = passengerStarts.map(
+      (response) =>
+        response.json<{
+          data: { tripId: string; status: string; startedFeedbackAt: string };
+        }>().data,
+    );
+    expect(new Set(passengerStartData.map((result) => result.startedFeedbackAt)).size).toBe(1);
+    expect(passengerStartData[0]).toMatchObject({
+      tripId: selfTripId,
+      status: 'FEEDBACK_STARTED',
+    });
+    const [versionsAfterStart] = await database.db
+      .select({
+        questionnaireVersionId: feedbackHandoffs.questionnaireVersionId,
+        consentVersionId: feedbackHandoffs.consentVersionId,
+      })
+      .from(feedbackHandoffs)
+      .where(eq(feedbackHandoffs.tripId, selfTripId));
+    expect(versionsAfterStart).toEqual(pinnedVersions);
+
     const tampered = await app.inject({
       method: 'POST',
       url: '/api/v1/passenger/feedback/submissions',
@@ -712,6 +903,21 @@ integration('vehicle and trip APIs', () => {
     const receipt = submit.json<{ data: { id: string } }>().data;
     submissionIds.push(receipt.id);
     expect(submit.json()).toMatchObject({ data: { replayed: false, rewardEligible: false } });
+
+    const [consumedHandoff] = await database.db
+      .select({ consumedAt: feedbackHandoffs.consumedAt })
+      .from(feedbackHandoffs)
+      .where(eq(feedbackHandoffs.tripId, selfTripId));
+    expect(consumedHandoff?.consumedAt).toBeInstanceOf(Date);
+    const startAfterConsumption = await app.inject({
+      method: 'POST',
+      url: '/api/v1/passenger/feedback/start',
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    expect(startAfterConsumption.statusCode).toBe(401);
+    expect(startAfterConsumption.json()).toMatchObject({
+      error: { code: 'FEEDBACK_HANDOFF_INVALID' },
+    });
 
     const replay = await app.inject({
       method: 'POST',
@@ -903,8 +1109,7 @@ integration('vehicle and trip APIs', () => {
       url: '/api/v1/driver/trips',
       headers: { cookie: driverCookie },
       payload: {
-        bookingReference: `${payload.bookingReference}-EXPIRY`,
-        passengerName: payload.passengerName,
+        bookingId: payload.bookingId,
         pickupLocation: payload.pickupLocation,
         destination: payload.destination,
         scheduledAt: '2030-08-10T06:30:00.000Z',
@@ -931,6 +1136,15 @@ integration('vehicle and trip APIs', () => {
     });
     expect(expiredContext.statusCode).toBe(401);
     expect(expiredContext.json()).toMatchObject({ error: { code: 'FEEDBACK_HANDOFF_INVALID' } });
+    const expiredStart = await app.inject({
+      method: 'POST',
+      url: '/api/v1/passenger/feedback/start',
+      headers: { authorization: `Bearer ${expiredToken}` },
+    });
+    expect(expiredStart.statusCode).toBe(401);
+    expect(expiredStart.json()).toMatchObject({
+      error: { code: 'FEEDBACK_HANDOFF_INVALID' },
+    });
 
     const deactivate = await app.inject({
       method: 'PATCH',
@@ -960,8 +1174,7 @@ integration('vehicle and trip APIs', () => {
 
   function tripPayload(assignedDriverId: string) {
     return {
-      bookingReference: `BOOK-${suffix}`,
-      passengerName: 'Integration Passenger',
+      bookingId,
       pickupLocation: 'Kolkata Airport',
       destination: 'Darjeeling',
       scheduledAt: '2030-08-10T04:30:00.000Z',

@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import {
   boolean,
   check,
+  date,
   index,
   integer,
   pgTable,
@@ -71,5 +72,31 @@ export const driverLeavePeriods = pgTable(
   (table) => [
     index('driver_leave_periods_driver_time_idx').on(table.driverId, table.startsAt, table.endsAt),
     check('driver_leave_periods_range_check', sql`${table.endsAt} > ${table.startsAt}`),
+  ],
+);
+
+export const driverLicenses = pgTable(
+  'driver_licenses',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    driverId: uuid('driver_id')
+      .notNull()
+      .unique()
+      .references(() => drivers.id, { onDelete: 'cascade' }),
+    licenseNumber: text('license_number'),
+    issuedOn: date('issued_on'),
+    expiresOn: date('expires_on'),
+    issuingAuthority: text('issuing_authority'),
+    categories: text('categories').array(),
+    verifiedAt: timestamp('verified_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('driver_licenses_expiry_idx').on(table.expiresOn),
+    check(
+      'driver_licenses_date_range_check',
+      sql`${table.issuedOn} IS NULL OR ${table.expiresOn} IS NULL OR ${table.expiresOn} > ${table.issuedOn}`,
+    ),
   ],
 );

@@ -1,15 +1,7 @@
 import { sql } from 'drizzle-orm';
-import {
-  check,
-  index,
-  jsonb,
-  pgTable,
-  text,
-  timestamp,
-  uniqueIndex,
-  uuid,
-} from 'drizzle-orm/pg-core';
+import { check, index, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { authAccounts } from './accounts.js';
+import { bookings } from './bookings.js';
 import { drivers } from './drivers.js';
 import { driverSourceType, tripCreationSource, tripStatus } from './enums.js';
 import { vehicles } from './vehicles.js';
@@ -24,8 +16,9 @@ export const trips = pgTable(
   'trips',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    bookingReference: text('booking_reference').notNull(),
-    passengerName: text('passenger_name').notNull(),
+    bookingId: uuid('booking_id')
+      .notNull()
+      .references(() => bookings.id, { onDelete: 'restrict' }),
     pickupLocation: text('pickup_location').notNull(),
     destination: text('destination').notNull(),
     scheduledAt: timestamp('scheduled_at', { withTimezone: true }).notNull(),
@@ -53,8 +46,7 @@ export const trips = pgTable(
     archivedAt: timestamp('archived_at', { withTimezone: true }),
   },
   (table) => [
-    index('trips_booking_reference_idx').on(table.bookingReference),
-    uniqueIndex('trips_booking_reference_unique').on(sql`lower(${table.bookingReference})`),
+    index('trips_booking_scheduled_idx').on(table.bookingId, table.scheduledAt),
     index('trips_driver_status_scheduled_idx').on(table.driverId, table.status, table.scheduledAt),
     index('trips_status_scheduled_idx').on(table.status, table.scheduledAt),
     check('trips_schedule_range_check', sql`${table.scheduledEndAt} > ${table.scheduledAt}`),

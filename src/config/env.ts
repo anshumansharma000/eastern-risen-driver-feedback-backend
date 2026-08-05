@@ -21,6 +21,7 @@ export interface AppConfig {
   readonly sessionRotationIntervalHours: number;
   readonly sessionRotationGraceSeconds: number;
   readonly feedbackHandoffTtlHours: number;
+  readonly passengerFeedbackUrl: string;
   readonly dataEncryptionKey: Buffer;
   readonly frontendOrigins: readonly string[];
   readonly trustProxyHops: number;
@@ -73,6 +74,13 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
   const databaseConnection = resolveDatabaseConnection(databaseUrl, environment);
 
   const frontendOrigins = parseOrigins(environment.FRONTEND_ORIGINS);
+  if (nodeEnv === 'production' && !environment.PASSENGER_FEEDBACK_URL) {
+    throw new Error('PASSENGER_FEEDBACK_URL is required in production');
+  }
+  const passengerFeedbackUrl = parseUrl(
+    'PASSENGER_FEEDBACK_URL',
+    environment.PASSENGER_FEEDBACK_URL ?? 'http://localhost:3001/feedback',
+  );
   if (nodeEnv === 'production' && databaseConnection.sslMode === 'disable') {
     throw new Error('DATABASE_SSL_MODE must require TLS in production');
   }
@@ -139,6 +147,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
       environment.FEEDBACK_HANDOFF_TTL_HOURS,
       168,
     ),
+    passengerFeedbackUrl,
     dataEncryptionKey: parseDataEncryptionKey(environment.DATA_ENCRYPTION_KEY_BASE64, nodeEnv),
     frontendOrigins,
     trustProxyHops: parseNonNegativeInteger('TRUST_PROXY_HOPS', environment.TRUST_PROXY_HOPS, 0),
@@ -168,6 +177,14 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
       1_048_576,
     ),
   };
+}
+
+function parseUrl(name: string, value: string): string {
+  try {
+    return new URL(value).toString();
+  } catch {
+    throw new Error(`${name} must be a valid absolute URL`);
+  }
 }
 
 function parseDataEncryptionKey(value: string | undefined, nodeEnv: NodeEnvironment): Buffer {

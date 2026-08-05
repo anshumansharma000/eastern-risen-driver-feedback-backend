@@ -13,6 +13,12 @@ export const tripStatus = pgEnum('trip_status', [
   'SUBMITTED',
   'ARCHIVED',
 ]);
+export const bookingStatus = pgEnum('booking_status', [
+  'ACTIVE',
+  'COMPLETED',
+  'CANCELLED',
+  'ARCHIVED',
+]);
 export const questionnaireStatus = pgEnum('questionnaire_status', ['ACTIVE', 'ARCHIVED']);
 export const questionnaireVersionStatus = pgEnum('questionnaire_version_status', [
   'DRAFT',

@@ -17,8 +17,7 @@ export const tripStatusSchema = Type.Union([
 ]);
 
 const tripFields = {
-  bookingReference: Type.String({ minLength: 1, maxLength: 100 }),
-  passengerName: Type.String({ minLength: 1, maxLength: 200 }),
+  bookingId: Type.String({ format: 'uuid' }),
   pickupLocation: Type.String({ minLength: 1, maxLength: 500 }),
   destination: Type.String({ minLength: 1, maxLength: 500 }),
   scheduledAt: Type.String({ format: 'date-time' }),
@@ -35,8 +34,7 @@ export const createDriverTripBodySchema = Type.Object(tripFields, { additionalPr
 
 export const updateAdminTripBodySchema = Type.Object(
   {
-    bookingReference: Type.Optional(tripFields.bookingReference),
-    passengerName: Type.Optional(tripFields.passengerName),
+    bookingId: Type.Optional(tripFields.bookingId),
     pickupLocation: Type.Optional(tripFields.pickupLocation),
     destination: Type.Optional(tripFields.destination),
     scheduledAt: Type.Optional(tripFields.scheduledAt),
@@ -51,6 +49,7 @@ export const tripListQuerySchema = Type.Object({
   status: Type.Optional(tripStatusSchema),
   driverId: Type.Optional(Type.String({ format: 'uuid' })),
   creationSource: Type.Optional(tripCreationSourceSchema),
+  bookingId: Type.Optional(Type.String({ format: 'uuid' })),
   page: Type.Optional(Type.Integer({ minimum: 1, default: 1 })),
   pageSize: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, default: 25 })),
 });
@@ -63,8 +62,11 @@ export const driverTripListQuerySchema = Type.Object({
 
 export const tripSchema = Type.Object({
   id: Type.String({ format: 'uuid' }),
-  bookingReference: Type.String(),
-  passengerName: Type.String(),
+  booking: Type.Object({
+    id: Type.String({ format: 'uuid' }),
+    bookingReference: Type.String(),
+    passengerName: Type.String(),
+  }),
   pickupLocation: Type.String(),
   destination: Type.String(),
   scheduledAt: Type.String({ format: 'date-time' }),

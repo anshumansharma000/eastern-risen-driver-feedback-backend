@@ -11,6 +11,7 @@ import {
   driverPerformanceRoutes,
 } from './modules/analytics/analytics.routes.js';
 import { authRoutes } from './modules/auth/auth.routes.js';
+import { bookingRoutes } from './modules/bookings/booking.routes.js';
 import { driverRoutes } from './modules/drivers/driver.routes.js';
 import { adminFeedbackRoutes } from './modules/feedback/admin-feedback.routes.js';
 import { feedbackRoutes } from './modules/feedback/feedback.routes.js';
@@ -73,6 +74,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         { name: 'authentication', description: 'Administrator and driver sessions' },
         { name: 'drivers', description: 'Administrator-managed driver accounts' },
         { name: 'vehicles', description: 'Administrator-managed vehicles' },
+        { name: 'bookings', description: 'Passenger bookings spanning one or more trips' },
         { name: 'trips', description: 'Administrator trip management' },
         { name: 'driver trips', description: 'Trips assigned to the authenticated driver' },
         {
@@ -130,10 +132,17 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       guards: options.services.guards,
       vehicleService: options.services.vehicleService,
     });
+    await app.register(bookingRoutes, {
+      prefix: '/api/v1/admin/bookings',
+      guards: options.services.guards,
+      bookingService: options.services.bookingService,
+      tripService: options.services.tripService,
+    });
     await app.register(adminTripRoutes, {
       prefix: '/api/v1/admin/trips',
       guards: options.services.guards,
       tripService: options.services.tripService,
+      feedbackService: options.services.feedbackService,
     });
     await app.register(driverTripRoutes, {
       prefix: '/api/v1/driver/trips',

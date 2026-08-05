@@ -233,6 +233,15 @@ function serializeDriver(driver: {
   shiftEndTime: string | null;
   timeZone: string;
   maxDailyDutyMinutes: number;
+  license: {
+    id: string;
+    licenseNumber: string | null;
+    issuedOn: string | null;
+    expiresOn: string | null;
+    issuingAuthority: string | null;
+    categories: string[] | null;
+    verifiedAt: Date | null;
+  } | null;
   status: 'ACTIVE' | 'DEACTIVATED' | 'ARCHIVED';
   createdAt: Date;
   updatedAt: Date;
@@ -245,6 +254,12 @@ function serializeDriver(driver: {
     createdAt: driver.createdAt.toISOString(),
     updatedAt: driver.updatedAt.toISOString(),
     archivedAt: driver.archivedAt?.toISOString() ?? null,
+    license: driver.license
+      ? {
+          ...driver.license,
+          verifiedAt: driver.license.verifiedAt?.toISOString() ?? null,
+        }
+      : null,
   };
 }
 

@@ -120,13 +120,26 @@ integration('authentication and admin APIs', () => {
         driverCode,
         sourceType: 'OUTSOURCED',
         vendorId,
+        license: {
+          licenseNumber: `LIC-${suffix}`,
+          issuedOn: '2025-01-01',
+          expiresOn: '2030-01-01',
+          issuingAuthority: 'West Bengal Transport Department',
+          categories: ['LMV'],
+        },
       },
     });
     expect(driverResponse.statusCode, driverResponse.body).toBe(201);
     const driver = driverResponse.json<{
-      data: { id: string; accountId: string; vendorName: string | null };
+      data: {
+        id: string;
+        accountId: string;
+        vendorName: string | null;
+        license: { licenseNumber: string; categories: string[] };
+      };
     }>().data;
     expect(driver.vendorName).toBe(`Integration Vendor ${suffix}`);
+    expect(driver.license).toMatchObject({ licenseNumber: `LIC-${suffix}`, categories: ['LMV'] });
     driverId = driver.id;
     driverAccountId = driver.accountId;
 

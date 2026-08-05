@@ -17,11 +17,28 @@ describe('loadConfig', () => {
       sessionAbsoluteTtlDays: 30,
       sessionRotationIntervalHours: 24,
       sessionRotationGraceSeconds: 60,
+      passengerFeedbackUrl: 'http://localhost:3001/feedback',
       frontendOrigins: [],
       trustProxyHops: 0,
       requestTimeoutMs: 30_000,
       bodyLimitBytes: 1_048_576,
     });
+  });
+
+  it('loads and validates the public passenger feedback URL', () => {
+    expect(
+      loadConfig({
+        DATABASE_URL: 'postgresql://localhost/test',
+        PASSENGER_FEEDBACK_URL: 'https://feedback.example.com/form?source=shared',
+      }).passengerFeedbackUrl,
+    ).toBe('https://feedback.example.com/form?source=shared');
+
+    expect(() =>
+      loadConfig({
+        DATABASE_URL: 'postgresql://localhost/test',
+        PASSENGER_FEEDBACK_URL: '/feedback',
+      }),
+    ).toThrow('PASSENGER_FEEDBACK_URL must be a valid absolute URL');
   });
 
   it('normalizes configured frontend origins', () => {
@@ -59,6 +76,7 @@ describe('loadConfig', () => {
       DATABASE_URL: 'postgresql://localhost/test',
       DATABASE_SSL_MODE: 'require',
       FRONTEND_ORIGINS: 'https://feedback.example.com',
+      PASSENGER_FEEDBACK_URL: 'https://feedback.example.com/feedback',
     };
     expect(() => loadConfig(productionEnvironment)).toThrow(
       'DATA_ENCRYPTION_KEY_BASE64 is required in production',
@@ -78,6 +96,7 @@ describe('loadConfig', () => {
         NODE_ENV: 'production',
         DATABASE_URL: 'postgresql://localhost/test',
         FRONTEND_ORIGINS: 'https://feedback.example.com',
+        PASSENGER_FEEDBACK_URL: 'https://feedback.example.com/feedback',
         DATA_ENCRYPTION_KEY_BASE64: encryptionKey,
       }),
     ).toThrow('DATABASE_SSL_MODE must require TLS in production');
@@ -86,8 +105,21 @@ describe('loadConfig', () => {
         NODE_ENV: 'production',
         DATABASE_URL: 'postgresql://localhost/test',
         DATABASE_SSL_MODE: 'require',
+        PASSENGER_FEEDBACK_URL: 'https://feedback.example.com/feedback',
         DATA_ENCRYPTION_KEY_BASE64: encryptionKey,
       }),
     ).toThrow('FRONTEND_ORIGINS is required in production');
+  });
+
+  it('requires the public passenger feedback URL in production', () => {
+    expect(() =>
+      loadConfig({
+        NODE_ENV: 'production',
+        DATABASE_URL: 'postgresql://localhost/test',
+        DATABASE_SSL_MODE: 'require',
+        FRONTEND_ORIGINS: 'https://feedback.example.com',
+        DATA_ENCRYPTION_KEY_BASE64: Buffer.alloc(32, 7).toString('base64'),
+      }),
+    ).toThrow('PASSENGER_FEEDBACK_URL is required in production');
   });
 });

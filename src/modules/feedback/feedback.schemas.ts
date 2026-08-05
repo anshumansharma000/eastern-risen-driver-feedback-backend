@@ -53,14 +53,31 @@ export const passengerContextSchema = Type.Object({
 
 export const passengerContextResponseSchema = Type.Object({ data: passengerContextSchema });
 
+export const startFeedbackResponseSchema = Type.Object({
+  data: Type.Object({
+    tripId: Type.String({ format: 'uuid' }),
+    status: Type.Literal('FEEDBACK_STARTED'),
+    startedFeedbackAt: Type.String({ format: 'date-time' }),
+  }),
+});
+
 export const handoffResponseSchema = Type.Object({
   data: Type.Intersect([
     tripSchema,
     Type.Object({
       feedbackAccessToken: Type.String(),
       feedbackAccessTokenExpiresAt: Type.String({ format: 'date-time' }),
+      feedbackLink: Type.String({ format: 'uri' }),
     }),
   ]),
+});
+
+export const feedbackLinkResponseSchema = Type.Object({
+  data: Type.Object({
+    tripId: Type.String({ format: 'uuid' }),
+    feedbackLink: Type.String({ format: 'uri' }),
+    feedbackAccessTokenExpiresAt: Type.String({ format: 'date-time' }),
+  }),
 });
 
 // The question type determines the value shape; domain validation occurs against

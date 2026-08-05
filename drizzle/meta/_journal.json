@@ -71,6 +71,13 @@
       "when": 1784984647939,
       "tag": "0009_youthful_tigra",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1785867886710,
+      "tag": "0010_glossy_yellow_claw",
+      "breakpoints": true
     }
   ]
 }

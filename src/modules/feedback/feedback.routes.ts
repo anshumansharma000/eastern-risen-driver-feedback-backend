@@ -2,6 +2,7 @@ import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import type { FeedbackService } from './feedback.service.js';
 import {
   passengerContextResponseSchema,
+  startFeedbackResponseSchema,
   submissionReceiptSchema,
   submitFeedbackBodySchema,
 } from './feedback.schemas.js';
@@ -52,6 +53,30 @@ export const feedbackRoutes: FastifyPluginAsyncTypebox<FeedbackRouteOptions> = a
             timezone: context.settings.timezone,
             thankYouMessage: context.settings.defaultThankYouMessage,
           },
+        },
+      };
+    },
+  );
+
+  app.post(
+    '/start',
+    {
+      config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+      schema: {
+        tags: ['passenger feedback'],
+        summary: 'Begin passenger feedback after the introductory phase',
+        response: { 200: startFeedbackResponseSchema },
+      },
+    },
+    async (request) => {
+      const result = await options.feedbackService.start(
+        bearerToken(request.headers.authorization),
+      );
+      return {
+        data: {
+          tripId: result.tripId,
+          status: result.status,
+          startedFeedbackAt: result.startedFeedbackAt.toISOString(),
         },
       };
     },

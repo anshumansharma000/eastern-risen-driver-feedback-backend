@@ -1,15 +1,15 @@
-import { and, count, desc, eq, gt, lt, ne, sql, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, lt, ne, sql, type SQL } from 'drizzle-orm';
 import type { AppDatabase } from '../../database/client.js';
 import {
   auditEvents,
   authAccounts,
+  bookings,
   driverLeavePeriods,
   drivers,
   trips,
   vehicles,
   vendors,
 } from '../../database/schema/index.js';
-import { isPostgresError } from '../../shared/database/postgres-error.js';
 import { AppError } from '../../shared/errors/app-error.js';
 
 type AppTransaction = Parameters<Parameters<AppDatabase['transaction']>[0]>[0];
@@ -19,8 +19,7 @@ export type TripStatus = 'READY' | 'FEEDBACK_STARTED' | 'SUBMITTED' | 'ARCHIVED'
 export type TripCreationSource = 'ADMIN_ASSIGNED' | 'DRIVER_ENTERED';
 
 export interface CreateTripInput {
-  readonly bookingReference: string;
-  readonly passengerName: string;
+  readonly bookingId: string;
   readonly pickupLocation: string;
   readonly destination: string;
   readonly scheduledAt: string;
@@ -30,8 +29,7 @@ export interface CreateTripInput {
 }
 
 export interface UpdateTripInput {
-  readonly bookingReference?: string;
-  readonly passengerName?: string;
+  readonly bookingId?: string;
   readonly pickupLocation?: string;
   readonly destination?: string;
   readonly scheduledAt?: string;
@@ -44,14 +42,16 @@ export interface ListTripsInput {
   readonly status?: TripStatus;
   readonly driverId?: string;
   readonly creationSource?: TripCreationSource;
+  readonly bookingId?: string;
   readonly page: number;
   readonly pageSize: number;
 }
 
 const tripSelection = {
   id: trips.id,
-  bookingReference: trips.bookingReference,
-  passengerName: trips.passengerName,
+  bookingId: trips.bookingId,
+  bookingReference: bookings.bookingReference,
+  passengerName: bookings.passengerName,
   pickupLocation: trips.pickupLocation,
   destination: trips.destination,
   scheduledAt: trips.scheduledAt,
@@ -97,10 +97,10 @@ export class TripService {
       });
     }
 
+    const bookingId = input.bookingId ?? current.bookingId;
     const driverId = input.driverId ?? current.driverId;
     const vehicleId = input.vehicleId ?? current.vehicleId;
     const schedule = this.validateBasicAssignment({
-      bookingReference: input.bookingReference ?? current.bookingReference,
       pickupLocation: input.pickupLocation ?? current.pickupLocation,
       destination: input.destination ?? current.destination,
       scheduledAt: input.scheduledAt ?? current.scheduledAt.toISOString(),
@@ -109,31 +109,21 @@ export class TripService {
     try {
       const [updated] = await this.db.transaction(async (tx) => {
         await this.acquireAssignmentLocks(tx, [
-          `booking:${input.bookingReference ?? current.bookingReference}`,
+          `booking:${bookingId}`,
           `driver:${driverId}`,
           `vehicle:${vehicleId}`,
         ]);
-        const [driver, vehicle] = await Promise.all([
+        const [booking, driver, vehicle] = await Promise.all([
+          this.resolveBooking(bookingId, tx),
           this.resolveDriver(driverId, tx),
           this.resolveVehicle(vehicleId, tx),
         ]);
-        await this.validateAssignment(
-          tx,
-          driver,
-          vehicle.id,
-          input.bookingReference ?? current.bookingReference,
-          schedule,
-          id,
-        );
+        await this.validateAssignment(tx, driver, vehicle.id, schedule, id);
+        this.validateBookingPeriod(booking, schedule);
         const rows = await tx
           .update(trips)
           .set({
-            ...(input.bookingReference !== undefined
-              ? { bookingReference: input.bookingReference.trim() }
-              : {}),
-            ...(input.passengerName !== undefined
-              ? { passengerName: input.passengerName.trim() }
-              : {}),
+            bookingId: booking.id,
             ...(input.pickupLocation !== undefined
               ? { pickupLocation: input.pickupLocation.trim() }
               : {}),
@@ -158,7 +148,7 @@ export class TripService {
             updatedAt: new Date(),
           })
           .where(and(eq(trips.id, id), eq(trips.status, 'READY')))
-          .returning(tripSelection);
+          .returning({ id: trips.id });
         if (!rows[0]) {
           throw new AppError({
             code: 'TRIP_NOT_EDITABLE',
@@ -173,7 +163,7 @@ export class TripService {
           entityId: id,
           metadata: { changedFields: Object.keys(input).sort().join(',') },
         });
-        return rows;
+        return [await this.findTrip(tx, eq(trips.id, id))];
       });
       return updated!;
     } catch (error) {
@@ -185,7 +175,7 @@ export class TripService {
     const filter = driverId
       ? and(eq(trips.id, id), eq(trips.driverId, driverId))
       : eq(trips.id, id);
-    const [trip] = await this.db.select(tripSelection).from(trips).where(filter).limit(1);
+    const trip = await this.findTrip(this.db, filter);
     if (!trip) {
       throw new AppError({
         code: 'TRIP_NOT_FOUND',
@@ -201,12 +191,14 @@ export class TripService {
     conditions.push(input.status ? eq(trips.status, input.status) : ne(trips.status, 'ARCHIVED'));
     if (input.driverId) conditions.push(eq(trips.driverId, input.driverId));
     if (input.creationSource) conditions.push(eq(trips.creationSource, input.creationSource));
+    if (input.bookingId) conditions.push(eq(trips.bookingId, input.bookingId));
     const filter = and(...conditions);
     const offset = (input.page - 1) * input.pageSize;
     const [items, [total]] = await Promise.all([
       this.db
         .select(tripSelection)
         .from(trips)
+        .innerJoin(bookings, eq(bookings.id, trips.bookingId))
         .where(filter)
         .orderBy(desc(trips.scheduledAt), desc(trips.createdAt), desc(trips.id))
         .limit(input.pageSize)
@@ -216,15 +208,24 @@ export class TripService {
     return { items, total: total?.value ?? 0 };
   }
 
+  async listForBooking(bookingId: string) {
+    return this.db
+      .select(tripSelection)
+      .from(trips)
+      .innerJoin(bookings, eq(bookings.id, trips.bookingId))
+      .where(eq(trips.bookingId, bookingId))
+      .orderBy(asc(trips.scheduledAt), asc(trips.createdAt), asc(trips.id));
+  }
+
   async archive(id: string, actorAccountId: string) {
     return this.db.transaction(async (tx) => {
       const now = new Date();
-      const [trip] = await tx
+      const [updated] = await tx
         .update(trips)
         .set({ status: 'ARCHIVED', archivedAt: now, updatedAt: now })
         .where(eq(trips.id, id))
-        .returning(tripSelection);
-      if (!trip) {
+        .returning({ id: trips.id });
+      if (!updated) {
         throw new AppError({
           code: 'TRIP_NOT_FOUND',
           message: 'Trip was not found',
@@ -237,47 +238,7 @@ export class TripService {
         entityType: 'TRIP',
         entityId: id,
       });
-      return trip;
-    });
-  }
-
-  async startFeedback(id: string, driverId: string, actorAccountId: string) {
-    const current = await this.get(id, driverId);
-    if (current.status === 'FEEDBACK_STARTED') return current;
-    if (current.status !== 'READY') {
-      throw new AppError({
-        code: 'TRIP_CANNOT_START_FEEDBACK',
-        message: 'Feedback cannot be started for this trip',
-        statusCode: 409,
-      });
-    }
-    return this.db.transaction(async (tx) => {
-      const now = new Date();
-      const [trip] = await tx
-        .update(trips)
-        .set({ status: 'FEEDBACK_STARTED', startedFeedbackAt: now, updatedAt: now })
-        .where(and(eq(trips.id, id), eq(trips.driverId, driverId), eq(trips.status, 'READY')))
-        .returning(tripSelection);
-      if (!trip) {
-        const [currentTrip] = await tx
-          .select(tripSelection)
-          .from(trips)
-          .where(and(eq(trips.id, id), eq(trips.driverId, driverId)))
-          .limit(1);
-        if (currentTrip?.status === 'FEEDBACK_STARTED') return currentTrip;
-        throw new AppError({
-          code: 'TRIP_CANNOT_START_FEEDBACK',
-          message: 'Feedback cannot be started for this trip',
-          statusCode: 409,
-        });
-      }
-      await tx.insert(auditEvents).values({
-        actorAccountId,
-        action: 'TRIP_FEEDBACK_STARTED',
-        entityType: 'TRIP',
-        entityId: id,
-      });
-      return trip;
+      return (await this.findTrip(tx, eq(trips.id, id)))!;
     });
   }
 
@@ -290,20 +251,21 @@ export class TripService {
     try {
       return await this.db.transaction(async (tx) => {
         await this.acquireAssignmentLocks(tx, [
-          `booking:${input.bookingReference}`,
+          `booking:${input.bookingId}`,
           `driver:${input.driverId}`,
           `vehicle:${input.vehicleId}`,
         ]);
-        const [driver, vehicle] = await Promise.all([
+        const [booking, driver, vehicle] = await Promise.all([
+          this.resolveBooking(input.bookingId, tx),
           this.resolveDriver(input.driverId, tx),
           this.resolveVehicle(input.vehicleId, tx),
         ]);
-        await this.validateAssignment(tx, driver, vehicle.id, input.bookingReference, schedule);
-        const [trip] = await tx
+        this.validateBookingPeriod(booking, schedule);
+        await this.validateAssignment(tx, driver, vehicle.id, schedule);
+        const [created] = await tx
           .insert(trips)
           .values({
-            bookingReference: input.bookingReference.trim(),
-            passengerName: input.passengerName.trim(),
+            bookingId: booking.id,
             pickupLocation: input.pickupLocation.trim(),
             destination: input.destination.trim(),
             scheduledAt: new Date(input.scheduledAt),
@@ -322,7 +284,8 @@ export class TripService {
             creationSource,
             createdByAccountId: actorAccountId,
           })
-          .returning(tripSelection);
+          .returning({ id: trips.id });
+        const trip = await this.findTrip(tx, eq(trips.id, created!.id));
         await tx.insert(auditEvents).values({
           actorAccountId,
           action: 'TRIP_CREATED',
@@ -368,6 +331,45 @@ export class TripService {
     return driver;
   }
 
+  private async findTrip(database: QueryDatabase, filter: SQL | undefined) {
+    const [trip] = await database
+      .select(tripSelection)
+      .from(trips)
+      .innerJoin(bookings, eq(bookings.id, trips.bookingId))
+      .where(filter)
+      .limit(1);
+    return trip;
+  }
+
+  private async resolveBooking(id: string, database: QueryDatabase = this.db) {
+    const [booking] = await database
+      .select({ id: bookings.id, startsAt: bookings.startsAt, endsAt: bookings.endsAt })
+      .from(bookings)
+      .where(and(eq(bookings.id, id), eq(bookings.status, 'ACTIVE')))
+      .limit(1);
+    if (!booking) {
+      throw new AppError({
+        code: 'ACTIVE_BOOKING_NOT_FOUND',
+        message: 'The selected booking is unavailable',
+        statusCode: 400,
+      });
+    }
+    return booking;
+  }
+
+  private validateBookingPeriod(
+    booking: Awaited<ReturnType<TripService['resolveBooking']>>,
+    schedule: { scheduledAt: Date; scheduledEndAt: Date },
+  ) {
+    if (schedule.scheduledAt < booking.startsAt || schedule.scheduledEndAt > booking.endsAt) {
+      throw new AppError({
+        code: 'TRIP_OUTSIDE_BOOKING_PERIOD',
+        message: 'The trip must fall within the booking period',
+        statusCode: 409,
+      });
+    }
+  }
+
   private async resolveVehicle(id: string, database: QueryDatabase = this.db) {
     const [vehicle] = await database
       .select({
@@ -389,7 +391,6 @@ export class TripService {
   }
 
   private validateBasicAssignment(input: {
-    bookingReference: string;
     pickupLocation: string;
     destination: string;
     scheduledAt: string;
@@ -425,7 +426,6 @@ export class TripService {
     database: AppTransaction,
     driver: Awaited<ReturnType<TripService['resolveDriver']>>,
     vehicleId: string,
-    bookingReference: string,
     schedule: { scheduledAt: Date; scheduledEndAt: Date },
     excludedTripId?: string,
   ) {
@@ -446,18 +446,7 @@ export class TripService {
       gt(trips.scheduledEndAt, schedule.scheduledAt),
       excludeCurrent,
     );
-    const [duplicate, driverConflict, vehicleConflict, leave, assignedTrips] = await Promise.all([
-      database
-        .select({ id: trips.id })
-        .from(trips)
-        .where(
-          and(
-            // The migration enforces the same case-insensitive rule atomically.
-            eq(sql`lower(${trips.bookingReference})`, bookingReference.trim().toLowerCase()),
-            excludedTripId ? ne(trips.id, excludedTripId) : undefined,
-          ),
-        )
-        .limit(1),
+    const [driverConflict, vehicleConflict, leave, assignedTrips] = await Promise.all([
       database
         .select({ id: trips.id })
         .from(trips)
@@ -495,13 +484,6 @@ export class TripService {
         ),
     ]);
 
-    if (duplicate[0]) {
-      throw new AppError({
-        code: 'TRIP_BOOKING_REFERENCE_ALREADY_EXISTS',
-        message: 'This booking reference is already in use',
-        statusCode: 409,
-      });
-    }
     if (driverConflict[0]) {
       throw new AppError({
         code: 'DRIVER_SCHEDULE_CONFLICT',
@@ -576,13 +558,6 @@ export class TripService {
   }
 
   private mapAssignmentDatabaseError(error: unknown): unknown {
-    if (isPostgresError(error, '23505') && error.constraint === 'trips_booking_reference_unique') {
-      return new AppError({
-        code: 'TRIP_BOOKING_REFERENCE_ALREADY_EXISTS',
-        message: 'This booking reference is already in use',
-        statusCode: 409,
-      });
-    }
     return error;
   }
 }

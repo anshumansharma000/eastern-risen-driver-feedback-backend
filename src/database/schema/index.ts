@@ -1,5 +1,6 @@
 export * from './accounts.js';
 export * from './authentication.js';
+export * from './bookings.js';
 export * from './drivers.js';
 export * from './enums.js';
 export * from './feedback.js';
