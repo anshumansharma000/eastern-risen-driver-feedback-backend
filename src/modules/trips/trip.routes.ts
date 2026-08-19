@@ -1,7 +1,12 @@
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import type { AuthGuards } from '../auth/auth.guard.js';
-import { feedbackLinkResponseSchema, handoffResponseSchema } from '../feedback/feedback.schemas.js';
+import {
+  adminFeedbackShareResponseSchema,
+  feedbackLinkResponseSchema,
+  handoffResponseSchema,
+} from '../feedback/feedback.schemas.js';
 import type { FeedbackService } from '../feedback/feedback.service.js';
+import type { BookingService } from '../bookings/booking.service.js';
 import {
   createAdminTripBodySchema,
   createDriverTripBodySchema,
@@ -17,11 +22,12 @@ import { presentTrip } from './trip.presenter.js';
 
 export interface AdminTripRouteOptions {
   readonly guards: AuthGuards;
+  readonly bookingService: BookingService;
   readonly tripService: TripService;
   readonly feedbackService: FeedbackService;
 }
 
-export type DriverTripRouteOptions = AdminTripRouteOptions;
+export type DriverTripRouteOptions = Omit<AdminTripRouteOptions, 'bookingService'>;
 
 export const adminTripRoutes: FastifyPluginAsyncTypebox<AdminTripRouteOptions> = async (
   app,
@@ -93,13 +99,21 @@ export const adminTripRoutes: FastifyPluginAsyncTypebox<AdminTripRouteOptions> =
         tags: ['trips'],
         summary: 'Get the shareable passenger feedback link for a trip',
         params: idParamsSchema,
-        response: { 200: feedbackLinkResponseSchema },
+        response: { 200: adminFeedbackShareResponseSchema },
       },
     },
     async (request) => {
       const trip = await options.tripService.get(request.params.id);
-      const handoff = await options.feedbackService.issueHandoff(trip.id);
-      return { data: presentFeedbackLink(handoff) };
+      const [handoff, booking] = await Promise.all([
+        options.feedbackService.issueHandoff(trip.id),
+        options.bookingService.get(trip.bookingId),
+      ]);
+      return {
+        data: {
+          ...presentFeedbackLink(handoff),
+          recipient: { name: booking.passengerName, phone: booking.passengerPhone },
+        },
+      };
     },
   );
 

@@ -3,12 +3,14 @@ import type { AppDatabase } from '../../database/client.js';
 import { auditEvents, bookings, trips } from '../../database/schema/index.js';
 import { isPostgresError } from '../../shared/database/postgres-error.js';
 import { AppError } from '../../shared/errors/app-error.js';
+import type { FieldEncryptor } from '../../shared/security/field-encryption.js';
 
 export type BookingStatus = 'ACTIVE' | 'COMPLETED' | 'CANCELLED' | 'ARCHIVED';
 
 export interface CreateBookingInput {
   readonly bookingReference: string;
   readonly passengerName: string;
+  readonly passengerPhone: string;
   readonly startsAt: string;
   readonly endsAt: string;
   readonly notes?: string | null;
@@ -17,6 +19,7 @@ export interface CreateBookingInput {
 export interface UpdateBookingInput {
   readonly bookingReference?: string;
   readonly passengerName?: string;
+  readonly passengerPhone?: string;
   readonly startsAt?: string;
   readonly endsAt?: string;
   readonly notes?: string | null;
@@ -27,18 +30,29 @@ const bookingSelection = {
   id: bookings.id,
   bookingReference: bookings.bookingReference,
   passengerName: bookings.passengerName,
+  passengerPhoneCiphertext: bookings.passengerPhoneCiphertext,
   startsAt: bookings.startsAt,
   endsAt: bookings.endsAt,
   status: bookings.status,
   notes: bookings.notes,
-  tripCount: sql<number>`(select count(*)::int from ${trips} where ${trips.bookingId} = ${bookings.id})`,
+  // Keep both sides qualified: Drizzle strips qualifiers from interpolated columns
+  // inside a scalar selection, which would otherwise compare trips.booking_id to
+  // trips.id instead of the outer booking id.
+  tripCount: sql<number>`(
+    select count(*)::int
+    from "trips" as "booking_trips"
+    where "booking_trips"."booking_id" = "bookings"."id"
+  )`,
   createdAt: bookings.createdAt,
   updatedAt: bookings.updatedAt,
   archivedAt: bookings.archivedAt,
 };
 
 export class BookingService {
-  constructor(private readonly db: AppDatabase) {}
+  constructor(
+    private readonly db: AppDatabase,
+    private readonly encryptor: FieldEncryptor,
+  ) {}
 
   async create(input: CreateBookingInput, actorAccountId: string) {
     const period = validatePeriod(input.startsAt, input.endsAt);
@@ -48,6 +62,7 @@ export class BookingService {
         .values({
           bookingReference: input.bookingReference.trim(),
           passengerName: input.passengerName.trim(),
+          passengerPhoneCiphertext: this.encryptor.encrypt(input.passengerPhone),
           startsAt: period.startsAt,
           endsAt: period.endsAt,
           notes: input.notes?.trim() || null,
@@ -101,6 +116,9 @@ export class BookingService {
           ...(input.passengerName !== undefined
             ? { passengerName: input.passengerName.trim() }
             : {}),
+          ...(input.passengerPhone !== undefined
+            ? { passengerPhoneCiphertext: this.encryptor.encrypt(input.passengerPhone) }
+            : {}),
           startsAt: period.startsAt,
           endsAt: period.endsAt,
           ...(input.notes !== undefined ? { notes: input.notes?.trim() || null } : {}),
@@ -136,7 +154,7 @@ export class BookingService {
         statusCode: 404,
       });
     }
-    return booking;
+    return this.withPassengerPhone(booking);
   }
 
   async list(input: { status?: BookingStatus; page: number; pageSize: number }) {
@@ -155,7 +173,7 @@ export class BookingService {
         .offset(offset),
       this.db.select({ value: count() }).from(bookings).where(filter),
     ]);
-    return { items, total: total?.value ?? 0 };
+    return { items: items.map((item) => this.withPassengerPhone(item)), total: total?.value ?? 0 };
   }
 
   async archive(id: string, actorAccountId: string) {
@@ -179,6 +197,16 @@ export class BookingService {
       entityId: id,
     });
     return this.get(id);
+  }
+
+  private withPassengerPhone<T extends { passengerPhoneCiphertext: string | null }>(booking: T) {
+    const { passengerPhoneCiphertext, ...rest } = booking;
+    return {
+      ...rest,
+      passengerPhone: passengerPhoneCiphertext
+        ? this.encryptor.decrypt(passengerPhoneCiphertext)
+        : null,
+    };
   }
 }
 

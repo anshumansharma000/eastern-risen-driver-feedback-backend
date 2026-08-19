@@ -9,3 +9,5 @@ coverage/
 .idea/
 .vscode/
 *.md
+!FRONTEND_PHOTO_UPLOAD_PROMPT.md
+!FRONTEND_WHATSAPP_SHARE_PROMPT.md

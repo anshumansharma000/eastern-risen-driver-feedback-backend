@@ -9,6 +9,7 @@ export const bookings = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     bookingReference: text('booking_reference').notNull(),
     passengerName: text('passenger_name').notNull(),
+    passengerPhoneCiphertext: text('passenger_phone_ciphertext'),
     startsAt: timestamp('starts_at', { withTimezone: true }).notNull(),
     endsAt: timestamp('ends_at', { withTimezone: true }).notNull(),
     status: bookingStatus('status').notNull().default('ACTIVE'),

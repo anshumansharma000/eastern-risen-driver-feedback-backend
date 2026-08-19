@@ -1,10 +1,11 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { and, eq, getTableColumns, sql } from 'drizzle-orm';
 import type { AppDatabase } from '../../database/client.js';
 import {
   feedbackAnswers,
   feedbackHandoffs,
+  feedbackPhotos,
   feedbackSubmissions,
   bookings,
   trips,
@@ -12,6 +13,11 @@ import {
 import { isPostgresError } from '../../shared/database/postgres-error.js';
 import type { FieldEncryptor } from '../../shared/security/field-encryption.js';
 import { AppError } from '../../shared/errors/app-error.js';
+import {
+  InvalidStoredPhotoError,
+  type AcceptedPhotoContentType,
+  type PhotoStorage,
+} from '../../shared/storage/photo-storage.js';
 import type { QuestionnaireService } from '../questionnaires/questionnaire.service.js';
 import type { SettingsService } from '../settings/settings.service.js';
 import { validateFeedbackAnswers } from './answer.validator.js';
@@ -32,6 +38,7 @@ export interface SubmitFeedbackInput {
   readonly answers: readonly { readonly questionId: string; readonly value: unknown }[];
   readonly submittedAt: string;
   readonly submissionMode: 'ONLINE' | 'OFFLINE_SYNC';
+  readonly photoId?: string;
 }
 
 export class FeedbackService {
@@ -42,6 +49,7 @@ export class FeedbackService {
     private readonly encryptor: FieldEncryptor,
     private readonly handoffTtlHours: number,
     private readonly passengerFeedbackUrl: string,
+    private readonly photoStorage: PhotoStorage,
     private readonly now: () => Date = () => new Date(),
   ) {}
 
@@ -215,6 +223,146 @@ export class FeedbackService {
     });
   }
 
+  async createPhotoUpload(
+    token: string,
+    input: { readonly contentType: AcceptedPhotoContentType; readonly sizeBytes: number },
+  ) {
+    this.ensurePhotoStorage();
+    const handoff = await this.resolveHandoff(token, true);
+    const trip = await this.getTrip(handoff.tripId);
+    if (trip.status !== 'FEEDBACK_STARTED') this.unavailableHandoff();
+    if (input.sizeBytes > this.photoStorage.maxUploadBytes) {
+      throw new AppError({
+        code: 'PHOTO_TOO_LARGE',
+        message: `Photo must be no larger than ${this.photoStorage.maxUploadBytes} bytes`,
+        statusCode: 413,
+      });
+    }
+
+    const id = randomUUID();
+    const uploadObjectKey = this.photoStorage.buildUploadObjectKey(trip.id, id);
+    const objectKey = this.photoStorage.buildStoredObjectKey(trip.id, id);
+    const expiresAt = new Date(this.now().getTime() + this.photoStorage.uploadUrlTtlSeconds * 1000);
+    await this.db.insert(feedbackPhotos).values({
+      id,
+      tripId: trip.id,
+      uploadObjectKey,
+      objectKey,
+      declaredContentType: input.contentType,
+      uploadExpiresAt: expiresAt,
+    });
+    try {
+      const uploadUrl = await this.photoStorage.createUploadUrl(uploadObjectKey, input.contentType);
+      return {
+        id,
+        uploadUrl,
+        expiresAt,
+        contentType: input.contentType,
+        maxBytes: this.photoStorage.maxUploadBytes,
+      };
+    } catch (error) {
+      await this.db.delete(feedbackPhotos).where(eq(feedbackPhotos.id, id));
+      throw error;
+    }
+  }
+
+  async completePhotoUpload(token: string, photoId: string) {
+    this.ensurePhotoStorage();
+    const handoff = await this.resolveHandoff(token, true);
+    const photo = await this.db.transaction(async (tx) => {
+      const [current] = await tx
+        .select()
+        .from(feedbackPhotos)
+        .where(and(eq(feedbackPhotos.id, photoId), eq(feedbackPhotos.tripId, handoff.tripId)))
+        .for('update')
+        .limit(1);
+      if (!current) this.photoNotFound();
+      if (current.status === 'READY' || current.status === 'ATTACHED') return current;
+      if (current.status === 'REJECTED') {
+        throw new AppError({
+          code: 'PHOTO_UPLOAD_REJECTED',
+          message: 'The uploaded photo was rejected',
+          statusCode: 409,
+        });
+      }
+      if (current.status === 'PROCESSING') return current;
+      const [claimed] = await tx
+        .update(feedbackPhotos)
+        .set({ status: 'PROCESSING' })
+        .where(and(eq(feedbackPhotos.id, photoId), eq(feedbackPhotos.status, 'PENDING')))
+        .returning();
+      if (!claimed) this.photoNotFound();
+      return claimed;
+    });
+    if (photo.status === 'READY' || photo.status === 'ATTACHED')
+      return presentCompletedPhoto(photo);
+
+    try {
+      const sanitized = await this.photoStorage.sanitize(
+        photo.uploadObjectKey,
+        photo.objectKey,
+        photo.declaredContentType as AcceptedPhotoContentType,
+      );
+      const completedAt = this.now();
+      const [ready] = await this.db
+        .update(feedbackPhotos)
+        .set({
+          status: 'READY',
+          storedContentType: sanitized.contentType,
+          byteSize: sanitized.byteSize,
+          completedAt,
+        })
+        .where(and(eq(feedbackPhotos.id, photo.id), eq(feedbackPhotos.status, 'PROCESSING')))
+        .returning();
+      if (!ready) {
+        const [concurrentlyCompleted] = await this.db
+          .select()
+          .from(feedbackPhotos)
+          .where(eq(feedbackPhotos.id, photo.id))
+          .limit(1);
+        if (
+          concurrentlyCompleted?.status === 'READY' ||
+          concurrentlyCompleted?.status === 'ATTACHED'
+        ) {
+          return presentCompletedPhoto(concurrentlyCompleted);
+        }
+        this.photoNotFound();
+      }
+      return presentCompletedPhoto(ready);
+    } catch (error) {
+      if (error instanceof InvalidStoredPhotoError) {
+        const [rejected] = await this.db
+          .update(feedbackPhotos)
+          .set({ status: 'REJECTED' })
+          .where(and(eq(feedbackPhotos.id, photo.id), eq(feedbackPhotos.status, 'PROCESSING')))
+          .returning({ id: feedbackPhotos.id });
+        if (rejected) {
+          await Promise.allSettled([
+            this.photoStorage.delete(photo.uploadObjectKey),
+            this.photoStorage.delete(photo.objectKey),
+          ]);
+        }
+        throw new AppError({
+          code: 'PHOTO_INVALID',
+          message: error.message,
+          statusCode: 422,
+        });
+      }
+      await this.db
+        .update(feedbackPhotos)
+        .set({ status: 'PENDING' })
+        .where(and(eq(feedbackPhotos.id, photo.id), eq(feedbackPhotos.status, 'PROCESSING')));
+      if (isNotFoundStorageError(error)) {
+        throw new AppError({
+          code: 'PHOTO_UPLOAD_MISSING',
+          message: 'Upload the photo before completing the upload',
+          statusCode: 409,
+        });
+      }
+      throw error;
+    }
+  }
+
   async submit(token: string, input: SubmitFeedbackInput) {
     const handoff = await this.resolveHandoff(token, false);
     const [replayed] = await this.db
@@ -275,6 +423,22 @@ export class FeedbackService {
     const normalizedAnswers = validateFeedbackAnswers(version.questions, input.answers);
     try {
       const submission = await this.db.transaction(async (tx) => {
+        let photoToAttach: typeof feedbackPhotos.$inferSelect | undefined;
+        if (input.photoId) {
+          [photoToAttach] = await tx
+            .select()
+            .from(feedbackPhotos)
+            .where(and(eq(feedbackPhotos.id, input.photoId), eq(feedbackPhotos.tripId, trip.id)))
+            .for('update')
+            .limit(1);
+          if (!photoToAttach || photoToAttach.status !== 'READY') {
+            throw new AppError({
+              code: 'PHOTO_NOT_READY',
+              message: 'The optional photo has not completed uploading',
+              statusCode: 409,
+            });
+          }
+        }
         const [created] = await tx
           .insert(feedbackSubmissions)
           .values({
@@ -309,6 +473,24 @@ export class FeedbackService {
             })),
           );
         const now = new Date();
+        if (photoToAttach) {
+          const [attached] = await tx
+            .update(feedbackPhotos)
+            .set({
+              feedbackSubmissionId: created.id,
+              status: 'ATTACHED',
+              attachedAt: now,
+            })
+            .where(and(eq(feedbackPhotos.id, photoToAttach.id), eq(feedbackPhotos.status, 'READY')))
+            .returning({ id: feedbackPhotos.id });
+          if (!attached) {
+            throw new AppError({
+              code: 'PHOTO_ATTACHMENT_CONFLICT',
+              message: 'The optional photo is no longer available',
+              statusCode: 409,
+            });
+          }
+        }
         const [submittedTrip] = await tx
           .update(trips)
           .set({ status: 'SUBMITTED', updatedAt: now })
@@ -382,6 +564,24 @@ export class FeedbackService {
     });
   }
 
+  private ensurePhotoStorage(): void {
+    if (!this.photoStorage.enabled) {
+      throw new AppError({
+        code: 'PHOTO_STORAGE_UNAVAILABLE',
+        message: 'Photo uploads are temporarily unavailable',
+        statusCode: 503,
+      });
+    }
+  }
+
+  private photoNotFound(): never {
+    throw new AppError({
+      code: 'PHOTO_UPLOAD_NOT_FOUND',
+      message: 'Photo upload was not found',
+      statusCode: 404,
+    });
+  }
+
   private unavailableHandoff(): never {
     throw new AppError({
       code: 'FEEDBACK_HANDOFF_UNAVAILABLE',
@@ -395,6 +595,31 @@ export class FeedbackService {
     link.searchParams.set('token', token);
     return link.toString();
   }
+}
+
+function presentCompletedPhoto(photo: typeof feedbackPhotos.$inferSelect) {
+  if (photo.storedContentType !== 'image/jpeg' || photo.byteSize === null || !photo.completedAt) {
+    throw new Error('Completed feedback photo is missing stored metadata');
+  }
+  return {
+    id: photo.id,
+    status: 'READY' as const,
+    contentType: 'image/jpeg' as const,
+    byteSize: photo.byteSize,
+    completedAt: photo.completedAt,
+  };
+}
+
+function isNotFoundStorageError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    '$metadata' in error &&
+    typeof error.$metadata === 'object' &&
+    error.$metadata !== null &&
+    'httpStatusCode' in error.$metadata &&
+    error.$metadata.httpStatusCode === 404
+  );
 }
 
 function hashToken(token: string) {

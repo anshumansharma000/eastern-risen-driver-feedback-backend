@@ -22,6 +22,7 @@ describe('loadConfig', () => {
       trustProxyHops: 0,
       requestTimeoutMs: 30_000,
       bodyLimitBytes: 1_048_576,
+      r2: null,
     });
   });
 
@@ -60,6 +61,36 @@ describe('loadConfig', () => {
     ).toThrow('PORT must be a positive integer');
   });
 
+  it('loads a bucket-scoped R2 photo storage configuration', () => {
+    const config = loadConfig({
+      DATABASE_URL: 'postgresql://localhost/test',
+      R2_ACCOUNT_ID: 'account-id',
+      R2_BUCKET_NAME: 'easternrisen',
+      R2_KEY_PREFIX: '/feedbackphotos/',
+      R2_ACCESS_KEY_ID: 'access-key',
+      R2_SECRET_ACCESS_KEY: 'secret-key',
+    });
+
+    expect(config.r2).toMatchObject({
+      bucketName: 'easternrisen',
+      keyPrefix: 'feedbackphotos',
+      endpoint: 'https://account-id.r2.cloudflarestorage.com/',
+      uploadUrlTtlSeconds: 600,
+      downloadUrlTtlSeconds: 300,
+      maxUploadBytes: 10_485_760,
+      orphanTtlHours: 24,
+    });
+  });
+
+  it('rejects a partial R2 configuration', () => {
+    expect(() =>
+      loadConfig({
+        DATABASE_URL: 'postgresql://localhost/test',
+        R2_ACCOUNT_ID: 'account-id',
+      }),
+    ).toThrow('R2_BUCKET_NAME, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY must be configured together');
+  });
+
   it('requires token rotation before the inactivity deadline', () => {
     expect(() =>
       loadConfig({
@@ -77,6 +108,7 @@ describe('loadConfig', () => {
       DATABASE_SSL_MODE: 'require',
       FRONTEND_ORIGINS: 'https://feedback.example.com',
       PASSENGER_FEEDBACK_URL: 'https://feedback.example.com/feedback',
+      ...productionR2Environment,
     };
     expect(() => loadConfig(productionEnvironment)).toThrow(
       'DATA_ENCRYPTION_KEY_BASE64 is required in production',
@@ -98,6 +130,7 @@ describe('loadConfig', () => {
         FRONTEND_ORIGINS: 'https://feedback.example.com',
         PASSENGER_FEEDBACK_URL: 'https://feedback.example.com/feedback',
         DATA_ENCRYPTION_KEY_BASE64: encryptionKey,
+        ...productionR2Environment,
       }),
     ).toThrow('DATABASE_SSL_MODE must require TLS in production');
     expect(() =>
@@ -107,6 +140,7 @@ describe('loadConfig', () => {
         DATABASE_SSL_MODE: 'require',
         PASSENGER_FEEDBACK_URL: 'https://feedback.example.com/feedback',
         DATA_ENCRYPTION_KEY_BASE64: encryptionKey,
+        ...productionR2Environment,
       }),
     ).toThrow('FRONTEND_ORIGINS is required in production');
   });
@@ -119,7 +153,30 @@ describe('loadConfig', () => {
         DATABASE_SSL_MODE: 'require',
         FRONTEND_ORIGINS: 'https://feedback.example.com',
         DATA_ENCRYPTION_KEY_BASE64: Buffer.alloc(32, 7).toString('base64'),
+        ...productionR2Environment,
       }),
     ).toThrow('PASSENGER_FEEDBACK_URL is required in production');
   });
+
+  it('requires R2 photo storage in production', () => {
+    expect(() =>
+      loadConfig({
+        NODE_ENV: 'production',
+        DATABASE_URL: 'postgresql://localhost/test',
+        DATABASE_SSL_MODE: 'require',
+        FRONTEND_ORIGINS: 'https://feedback.example.com',
+        PASSENGER_FEEDBACK_URL: 'https://feedback.example.com/feedback',
+        DATA_ENCRYPTION_KEY_BASE64: Buffer.alloc(32, 7).toString('base64'),
+      }),
+    ).toThrow(
+      'R2_ACCOUNT_ID, R2_BUCKET_NAME, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY are required in production',
+    );
+  });
 });
+
+const productionR2Environment = {
+  R2_ACCOUNT_ID: 'account-id',
+  R2_BUCKET_NAME: 'easternrisen',
+  R2_ACCESS_KEY_ID: 'access-key',
+  R2_SECRET_ACCESS_KEY: 'secret-key',
+};

@@ -1,4 +1,5 @@
 import { Type } from 'typebox';
+import { e164PhoneSchema } from '../../shared/http/phone.schemas.js';
 import { lifecycleStatusSchema } from '../vendors/vendor.schemas.js';
 
 export const driverSourceSchema = Type.Union([Type.Literal('AGENCY'), Type.Literal('OUTSOURCED')]);
@@ -60,7 +61,7 @@ export const createDriverBodySchema = Type.Object(
     email: Type.String({ format: 'email', maxLength: 320 }),
     password: Type.String({ minLength: 12, maxLength: 128 }),
     driverCode: Type.String({ minLength: 1, maxLength: 64 }),
-    phone: Type.Optional(Type.String({ maxLength: 32 })),
+    phone: Type.Optional(e164PhoneSchema),
     sourceType: driverSourceSchema,
     vendorId: Type.Optional(Type.Union([Type.String({ format: 'uuid' }), Type.Null()])),
     assignmentEnabled: Type.Optional(Type.Boolean()),
@@ -78,7 +79,7 @@ export const updateDriverBodySchema = Type.Object(
     displayName: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
     email: Type.Optional(Type.String({ format: 'email', maxLength: 320 })),
     driverCode: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
-    phone: Type.Optional(Type.Union([Type.String({ maxLength: 32 }), Type.Null()])),
+    phone: Type.Optional(Type.Union([e164PhoneSchema, Type.Null()])),
     sourceType: Type.Optional(driverSourceSchema),
     vendorId: Type.Optional(Type.Union([Type.String({ format: 'uuid' }), Type.Null()])),
     assignmentEnabled: Type.Optional(Type.Boolean()),

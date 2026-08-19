@@ -4,6 +4,7 @@ import {
   auditEvents,
   authAccounts,
   feedbackAnswers,
+  feedbackPhotos,
   feedbackReviewEvents,
   feedbackSubmissions,
   trips,
@@ -11,6 +12,7 @@ import {
 import { AppError } from '../../shared/errors/app-error.js';
 import type { FieldEncryptor } from '../../shared/security/field-encryption.js';
 import type { SettingsService } from '../settings/settings.service.js';
+import type { PhotoStorage } from '../../shared/storage/photo-storage.js';
 
 type DriverSource = 'AGENCY' | 'OUTSOURCED';
 type ReviewState = 'NORMAL' | 'FLAGGED' | 'ARCHIVED';
@@ -54,6 +56,7 @@ export class AdminFeedbackService {
     private readonly db: AppDatabase,
     private readonly encryptor: FieldEncryptor,
     private readonly settings: SettingsService,
+    private readonly photoStorage: PhotoStorage,
   ) {}
 
   async list(input: ListAdminFeedbackInput) {
@@ -130,7 +133,7 @@ export class AdminFeedbackService {
       .limit(1);
     if (!row) this.notFound();
 
-    const [answers, history] = await Promise.all([
+    const [answers, history, [photo]] = await Promise.all([
       this.db
         .select()
         .from(feedbackAnswers)
@@ -149,12 +152,25 @@ export class AdminFeedbackService {
         .innerJoin(authAccounts, eq(feedbackReviewEvents.performedByAccountId, authAccounts.id))
         .where(eq(feedbackReviewEvents.feedbackSubmissionId, id))
         .orderBy(asc(feedbackReviewEvents.createdAt), asc(feedbackReviewEvents.id)),
+      this.db
+        .select({
+          id: feedbackPhotos.id,
+          contentType: feedbackPhotos.storedContentType,
+          byteSize: feedbackPhotos.byteSize,
+          attachedAt: feedbackPhotos.attachedAt,
+        })
+        .from(feedbackPhotos)
+        .where(
+          and(eq(feedbackPhotos.feedbackSubmissionId, id), eq(feedbackPhotos.status, 'ATTACHED')),
+        )
+        .limit(1),
     ]);
 
     return {
       ...row,
       answers,
       history,
+      photo: photo ?? null,
       overallScore: average(
         answers
           .map((answer) => answer.numericScore)
@@ -162,6 +178,38 @@ export class AdminFeedbackService {
       ),
       respondentPhone: this.encryptor.decrypt(row.submission.respondentPhoneCiphertext),
       respondentEmail: this.encryptor.decrypt(row.submission.respondentEmailCiphertext),
+    };
+  }
+
+  async getPhotoAccess(id: string) {
+    if (!this.photoStorage.enabled) {
+      throw new AppError({
+        code: 'PHOTO_STORAGE_UNAVAILABLE',
+        message: 'Photo storage is temporarily unavailable',
+        statusCode: 503,
+      });
+    }
+    const [photo] = await this.db
+      .select()
+      .from(feedbackPhotos)
+      .where(
+        and(eq(feedbackPhotos.feedbackSubmissionId, id), eq(feedbackPhotos.status, 'ATTACHED')),
+      )
+      .limit(1);
+    if (!photo || !photo.storedContentType || photo.byteSize === null || !photo.attachedAt) {
+      throw new AppError({
+        code: 'FEEDBACK_PHOTO_NOT_FOUND',
+        message: 'This feedback submission has no photo',
+        statusCode: 404,
+      });
+    }
+    const url = await this.photoStorage.createDownloadUrl(photo.objectKey);
+    return {
+      id: photo.id,
+      url,
+      expiresAt: new Date(Date.now() + this.photoStorage.downloadUrlTtlSeconds * 1000),
+      contentType: photo.storedContentType,
+      byteSize: photo.byteSize,
     };
   }
 

@@ -66,6 +66,30 @@ envs:
     scope: RUN_TIME
     type: GENERAL
     value: '60'
+  - key: R2_ACCOUNT_ID
+    scope: RUN_TIME
+    type: GENERAL
+    value: CHANGE_ME_CLOUDFLARE_ACCOUNT_ID
+  - key: R2_BUCKET_NAME
+    scope: RUN_TIME
+    type: GENERAL
+    value: easternrisen
+  - key: R2_KEY_PREFIX
+    scope: RUN_TIME
+    type: GENERAL
+    value: feedbackphotos
+  - key: R2_ACCESS_KEY_ID
+    scope: RUN_TIME
+    type: SECRET
+    value: CHANGE_ME_R2_ACCESS_KEY_ID
+  - key: R2_SECRET_ACCESS_KEY
+    scope: RUN_TIME
+    type: SECRET
+    value: CHANGE_ME_R2_SECRET_ACCESS_KEY
+  - key: R2_ENDPOINT
+    scope: RUN_TIME
+    type: GENERAL
+    value: https://CHANGE_ME_CLOUDFLARE_ACCOUNT_ID.r2.cloudflarestorage.com
 
 services:
   - name: api

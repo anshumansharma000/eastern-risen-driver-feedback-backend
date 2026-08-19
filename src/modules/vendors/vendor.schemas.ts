@@ -1,4 +1,5 @@
 import { Type } from 'typebox';
+import { e164PhoneSchema } from '../../shared/http/phone.schemas.js';
 
 export const lifecycleStatusSchema = Type.Union([
   Type.Literal('ACTIVE'),
@@ -23,7 +24,7 @@ export const createVendorBodySchema = Type.Object(
     name: Type.String({ minLength: 1, maxLength: 200 }),
     contactName: Type.Optional(Type.String({ maxLength: 200 })),
     contactEmail: Type.Optional(Type.String({ format: 'email', maxLength: 320 })),
-    contactPhone: Type.Optional(Type.String({ maxLength: 32 })),
+    contactPhone: Type.Optional(e164PhoneSchema),
   },
   { additionalProperties: false },
 );
@@ -35,7 +36,7 @@ export const updateVendorBodySchema = Type.Object(
     contactEmail: Type.Optional(
       Type.Union([Type.String({ format: 'email', maxLength: 320 }), Type.Null()]),
     ),
-    contactPhone: Type.Optional(Type.Union([Type.String({ maxLength: 32 }), Type.Null()])),
+    contactPhone: Type.Optional(Type.Union([e164PhoneSchema, Type.Null()])),
   },
   { additionalProperties: false, minProperties: 1 },
 );

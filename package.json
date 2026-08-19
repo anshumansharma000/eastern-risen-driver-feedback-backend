@@ -23,9 +23,13 @@
     "db:migrate:production": "node dist/scripts/migrate.js",
     "db:studio": "drizzle-kit studio",
     "admin:create": "tsx src/scripts/create-admin.ts",
-    "session:cleanup": "tsx src/scripts/cleanup-sessions.ts"
+    "session:cleanup": "tsx src/scripts/cleanup-sessions.ts",
+    "photos:cleanup": "tsx src/scripts/cleanup-photo-uploads.ts",
+    "photos:smoke": "tsx src/scripts/smoke-r2-photo.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1111.0",
+    "@aws-sdk/s3-request-presigner": "^3.1111.0",
     "@fastify/cookie": "11.1.2",
     "@fastify/cors": "11.3.0",
     "@fastify/helmet": "13.1.0",
@@ -39,6 +43,7 @@
     "fastify": "5.10.0",
     "fastify-plugin": "5.1.0",
     "pg": "8.22.0",
+    "sharp": "^0.35.3",
     "typebox": "1.3.6"
   },
   "devDependencies": {

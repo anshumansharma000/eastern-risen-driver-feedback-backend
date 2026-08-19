@@ -4,6 +4,7 @@ import { paginationSchema } from '../../shared/http/response.schemas.js';
 import type { AuthGuards } from '../auth/auth.guard.js';
 import {
   adminFeedbackDetailSchema,
+  adminFeedbackPhotoAccessSchema,
   adminFeedbackListQuerySchema,
   adminFeedbackSummarySchema,
   updateFeedbackReviewBodySchema,
@@ -66,6 +67,27 @@ export const adminFeedbackRoutes: FastifyPluginAsyncTypebox<AdminFeedbackRouteOp
         data: result.items.map(serializeSummary),
         pagination: { page, pageSize, total: result.total },
         meta: { timezone: result.timezone, dateBasis: 'SUBMITTED_AT' as const },
+      };
+    },
+  );
+
+  app.get(
+    '/:id/photo-url',
+    {
+      schema: {
+        tags: ['feedback review'],
+        summary: 'Create a short-lived private URL for an attached feedback photo',
+        params: idParamsSchema,
+        response: { 200: adminFeedbackPhotoAccessSchema },
+      },
+    },
+    async (request) => {
+      const result = await options.adminFeedbackService.getPhotoAccess(request.params.id);
+      return {
+        data: {
+          ...result,
+          expiresAt: result.expiresAt.toISOString(),
+        },
       };
     },
   );
@@ -166,6 +188,14 @@ function serializeDetail(result: Awaited<ReturnType<AdminFeedbackService['get']>
     consentVersionId: submission.consentVersionId,
     consentedAt: submission.consentedAt.toISOString(),
     questionnaireVersionId: submission.questionnaireVersionId,
+    photo: result.photo
+      ? {
+          ...result.photo,
+          contentType: result.photo.contentType!,
+          byteSize: result.photo.byteSize!,
+          attachedAt: result.photo.attachedAt!.toISOString(),
+        }
+      : null,
     answers: result.answers.map((answer) => ({
       id: answer.id,
       questionId: answer.versionQuestionId,

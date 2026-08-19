@@ -1,0 +1,1 @@
+ALTER TABLE "bookings" ADD COLUMN "passenger_phone_ciphertext" text;

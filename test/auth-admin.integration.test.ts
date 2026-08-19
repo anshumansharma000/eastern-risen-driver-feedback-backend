@@ -147,10 +147,10 @@ integration('authentication and admin APIs', () => {
       method: 'PATCH',
       url: `/api/v1/admin/drivers/${driverId}`,
       headers: { cookie: cookie! },
-      payload: { phone: '+91-9999999999' },
+      payload: { phone: '+919999999999' },
     });
     expect(driverUpdate.statusCode).toBe(200);
-    expect(driverUpdate.json()).toMatchObject({ data: { phone: '+91-9999999999' } });
+    expect(driverUpdate.json()).toMatchObject({ data: { phone: '+919999999999' } });
 
     const deactivate = await app.inject({
       method: 'PATCH',
@@ -250,11 +250,11 @@ integration('authentication and admin APIs', () => {
       method: 'PATCH',
       url: '/api/v1/driver/profile',
       headers: { cookie: driverCookie },
-      payload: { displayName: 'Driver Self Updated', phone: '+91-8888888888' },
+      payload: { displayName: 'Driver Self Updated', phone: '+918888888888' },
     });
     expect(driverProfileUpdate.statusCode, driverProfileUpdate.body).toBe(200);
     expect(driverProfileUpdate.json()).toMatchObject({
-      data: { displayName: 'Driver Self Updated', phone: '+91-8888888888' },
+      data: { displayName: 'Driver Self Updated', phone: '+918888888888' },
     });
 
     const changeDriverPassword = await app.inject({

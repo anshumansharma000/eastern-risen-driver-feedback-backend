@@ -34,6 +34,8 @@ npm run db:generate  # generate a migration after changing the Drizzle schema
 npm run db:migrate   # apply pending migrations
 npm run admin:create # provision an initial administrator from environment variables
 npm run session:cleanup # remove expired and old revoked sessions
+npm run photos:cleanup # delete expired temporary and unattached feedback photos
+npm run photos:smoke   # verify configured R2 upload, sanitization, and private download
 ```
 
 ## Initial administrator
@@ -88,10 +90,13 @@ The password is hashed with Argon2id before insertion and is never printed.
 - `GET /api/v1/admin/consent-versions/active`
 - `POST /api/v1/admin/consent-versions`
 - `GET /api/v1/passenger/feedback/context`
+- `POST /api/v1/passenger/feedback/photo-uploads`
+- `POST /api/v1/passenger/feedback/photo-uploads/:id/complete`
 - `POST /api/v1/passenger/feedback/submissions`
 - `GET|PATCH /api/v1/admin/settings`
 - `GET /api/v1/admin/feedback`
 - `GET /api/v1/admin/feedback/:id`
+- `GET /api/v1/admin/feedback/:id/photo-url`
 - `PATCH /api/v1/admin/feedback/:id/review-state`
 - `GET /api/v1/admin/analytics`
 - `GET /api/v1/driver/performance`
@@ -177,6 +182,24 @@ storage. Production requires a base64-encoded 32-byte
 `DATA_ENCRYPTION_KEY_BASE64` deployment secret. Back up and rotate this key only
 through an explicit data-migration procedure. `FEEDBACK_HANDOFF_TTL_HOURS`
 controls the passenger token lifetime and defaults to seven days.
+
+New bookings require a passenger phone number in E.164 format, such as
+`+919876543210`. It is encrypted with the same field-encryption key and returned
+only by protected administrator booking endpoints. The administrator feedback-link
+endpoint also returns the recipient name and phone so the frontend can open a
+prefilled `wa.me` share without any server-side WhatsApp provider.
+
+Every new or updated phone value uses the same canonical E.164 contract:
+`+` followed by the country code and subscriber number, with no spaces,
+parentheses, or hyphens. Optional driver and vendor phone fields may still be
+cleared with `null`; legacy stored values remain readable until corrected.
+
+Optional passenger photos upload directly to a private Cloudflare R2 bucket through
+short-lived presigned URLs. The API verifies the uploaded object, rejects unsupported
+or oversized content, strips metadata, bounds dimensions to 2400 pixels, and stores a
+normalized JPEG under a separate immutable key. Configure R2 with the `R2_*` variables
+in `.env.example`. Run `photos:cleanup` on a schedule at least hourly so expired
+temporary objects and unattached uploads are removed.
 
 Agency settings control the agency name, IANA timezone, passenger thank-you
 message, and an optional negative-feedback threshold. Passenger context includes

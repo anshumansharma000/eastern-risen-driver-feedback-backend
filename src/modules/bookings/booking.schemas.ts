@@ -1,4 +1,5 @@
 import { Type } from 'typebox';
+import { e164PhoneSchema } from '../../shared/http/phone.schemas.js';
 import { idParamsSchema } from '../vendors/vendor.schemas.js';
 import { tripSchema } from '../trips/trip.schemas.js';
 
@@ -14,6 +15,7 @@ export const bookingStatusSchema = Type.Union([
 const bookingFields = {
   bookingReference: Type.String({ minLength: 1, maxLength: 100 }),
   passengerName: Type.String({ minLength: 1, maxLength: 200 }),
+  passengerPhone: e164PhoneSchema,
   startsAt: Type.String({ format: 'date-time' }),
   endsAt: Type.String({ format: 'date-time' }),
   notes: Type.Union([Type.String({ maxLength: 2000 }), Type.Null()]),
@@ -23,6 +25,7 @@ export const createBookingBodySchema = Type.Object(
   {
     bookingReference: bookingFields.bookingReference,
     passengerName: bookingFields.passengerName,
+    passengerPhone: bookingFields.passengerPhone,
     startsAt: bookingFields.startsAt,
     endsAt: bookingFields.endsAt,
     notes: Type.Optional(bookingFields.notes),
@@ -34,6 +37,7 @@ export const updateBookingBodySchema = Type.Object(
   {
     bookingReference: Type.Optional(bookingFields.bookingReference),
     passengerName: Type.Optional(bookingFields.passengerName),
+    passengerPhone: Type.Optional(bookingFields.passengerPhone),
     startsAt: Type.Optional(bookingFields.startsAt),
     endsAt: Type.Optional(bookingFields.endsAt),
     notes: Type.Optional(bookingFields.notes),
@@ -54,6 +58,7 @@ export const bookingSchema = Type.Object({
   id: Type.String({ format: 'uuid' }),
   bookingReference: Type.String(),
   passengerName: Type.String(),
+  passengerPhone: Type.Union([bookingFields.passengerPhone, Type.Null()]),
   startsAt: Type.String({ format: 'date-time' }),
   endsAt: Type.String({ format: 'date-time' }),
   status: bookingStatusSchema,

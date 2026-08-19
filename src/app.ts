@@ -141,6 +141,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     await app.register(adminTripRoutes, {
       prefix: '/api/v1/admin/trips',
       guards: options.services.guards,
+      bookingService: options.services.bookingService,
       tripService: options.services.tripService,
       feedbackService: options.services.feedbackService,
     });

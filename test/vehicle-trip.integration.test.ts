@@ -21,6 +21,7 @@ import {
   vehicles,
 } from '../src/database/schema/index.js';
 import { passwordHasher } from '../src/modules/auth/password.js';
+import { createFieldEncryptor } from '../src/shared/security/field-encryption.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? describe : describe.skip;
@@ -70,6 +71,9 @@ integration('vehicle and trip APIs', () => {
       .values({
         bookingReference: `BOOK-${suffix}`,
         passengerName: 'Integration Passenger',
+        passengerPhoneCiphertext: createFieldEncryptor(config.dataEncryptionKey).encrypt(
+          '+919876543210',
+        ),
         startsAt: new Date('2029-01-01T00:00:00.000Z'),
         endsAt: new Date('2033-01-01T00:00:00.000Z'),
         createdByAccountId: adminAccountId,
@@ -182,6 +186,7 @@ integration('vehicle and trip APIs', () => {
         id: bookingId,
         bookingReference: `BOOK-${suffix}`,
         passengerName: 'Integration Passenger',
+        passengerPhone: '+919876543210',
         tripCount: 0,
         trips: [],
       },
@@ -420,10 +425,25 @@ integration('vehicle and trip APIs', () => {
     });
     expect(otherDriverPreparation.statusCode).toBe(404);
     const adminLinkData = adminFeedbackLink.json<{
-      data: { tripId: string; feedbackLink: string; feedbackAccessTokenExpiresAt: string };
+      data: {
+        tripId: string;
+        feedbackLink: string;
+        feedbackAccessTokenExpiresAt: string;
+        recipient: { name: string; phone: string | null };
+      };
     }>().data;
     expect(adminLinkData.feedbackLink).toMatch(/^http:\/\/localhost:3001\/feedback\?token=/);
-    expect(driverFeedbackLink.json()).toEqual({ data: adminLinkData });
+    expect(adminLinkData.recipient).toEqual({
+      name: 'Integration Passenger',
+      phone: '+919876543210',
+    });
+    expect(driverFeedbackLink.json()).toEqual({
+      data: {
+        tripId: adminLinkData.tripId,
+        feedbackLink: adminLinkData.feedbackLink,
+        feedbackAccessTokenExpiresAt: adminLinkData.feedbackAccessTokenExpiresAt,
+      },
+    });
     expect(adminFeedbackLink.json()).not.toHaveProperty('data.feedbackAccessToken');
     expect(driverFeedbackLink.json()).not.toHaveProperty('data.feedbackAccessToken');
 
@@ -482,7 +502,13 @@ integration('vehicle and trip APIs', () => {
       headers: { cookie: driverCookie },
     });
     expect(startedFeedbackLink.statusCode, startedFeedbackLink.body).toBe(200);
-    expect(startedFeedbackLink.json()).toEqual({ data: adminLinkData });
+    expect(startedFeedbackLink.json()).toEqual({
+      data: {
+        tripId: adminLinkData.tripId,
+        feedbackLink: adminLinkData.feedbackLink,
+        feedbackAccessTokenExpiresAt: adminLinkData.feedbackAccessTokenExpiresAt,
+      },
+    });
 
     const noLongerEditable = await app.inject({
       method: 'PATCH',
@@ -818,7 +844,7 @@ integration('vehicle and trip APIs', () => {
       questionnaireSnapshot: contextData.questionnaire,
       respondent: {
         name: 'Passenger One',
-        phone: '+91-9876543210',
+        phone: '+919876543210',
         email: 'passenger@example.com',
         bookingReference: `BOOK-${suffix}`,
         consentAccepted: true,
@@ -1012,7 +1038,7 @@ integration('vehicle and trip APIs', () => {
       data: {
         id: receipt.id,
         respondent: {
-          phone: '+91-9876543210',
+          phone: '+919876543210',
           email: 'passenger@example.com',
         },
         answers: [

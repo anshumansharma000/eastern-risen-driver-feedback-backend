@@ -1,7 +1,11 @@
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
+import { Type } from 'typebox';
 import type { FeedbackService } from './feedback.service.js';
 import {
+  completedPhotoResponseSchema,
+  createPhotoUploadBodySchema,
   passengerContextResponseSchema,
+  photoUploadResponseSchema,
   startFeedbackResponseSchema,
   submissionReceiptSchema,
   submitFeedbackBodySchema,
@@ -77,6 +81,60 @@ export const feedbackRoutes: FastifyPluginAsyncTypebox<FeedbackRouteOptions> = a
           tripId: result.tripId,
           status: result.status,
           startedFeedbackAt: result.startedFeedbackAt.toISOString(),
+        },
+      };
+    },
+  );
+
+  app.post(
+    '/photo-uploads',
+    {
+      config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+      schema: {
+        tags: ['passenger feedback'],
+        summary: 'Create a short-lived direct upload URL for an optional feedback photo',
+        body: createPhotoUploadBodySchema,
+        response: { 201: photoUploadResponseSchema },
+      },
+    },
+    async (request, reply) => {
+      const result = await options.feedbackService.createPhotoUpload(
+        bearerToken(request.headers.authorization),
+        request.body,
+      );
+      return reply.status(201).send({
+        data: {
+          id: result.id,
+          uploadUrl: result.uploadUrl,
+          method: 'PUT' as const,
+          headers: { 'Content-Type': result.contentType },
+          expiresAt: result.expiresAt.toISOString(),
+          maxBytes: result.maxBytes,
+        },
+      });
+    },
+  );
+
+  app.post(
+    '/photo-uploads/:id/complete',
+    {
+      config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+      schema: {
+        tags: ['passenger feedback'],
+        summary: 'Verify and sanitize a directly uploaded optional feedback photo',
+        params: Type.Object({ id: Type.String({ format: 'uuid' }) }),
+        response: { 200: completedPhotoResponseSchema },
+      },
+    },
+    async (request) => {
+      const result = await options.feedbackService.completePhotoUpload(
+        bearerToken(request.headers.authorization),
+        request.params.id,
+      );
+      return {
+        data: {
+          ...result,
+          completedAt: result.completedAt.toISOString(),
         },
       };
     },

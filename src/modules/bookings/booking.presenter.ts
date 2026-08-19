@@ -2,6 +2,7 @@ export function presentBooking(booking: {
   id: string;
   bookingReference: string;
   passengerName: string;
+  passengerPhone: string | null;
   startsAt: Date;
   endsAt: Date;
   status: 'ACTIVE' | 'COMPLETED' | 'CANCELLED' | 'ARCHIVED';

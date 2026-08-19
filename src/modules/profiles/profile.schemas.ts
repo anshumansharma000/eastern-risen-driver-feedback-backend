@@ -1,4 +1,5 @@
 import { Type } from 'typebox';
+import { e164PhoneSchema } from '../../shared/http/phone.schemas.js';
 import { driverSourceSchema } from '../drivers/driver.schemas.js';
 import { lifecycleStatusSchema } from '../vendors/vendor.schemas.js';
 
@@ -46,7 +47,7 @@ export const updateDriverProfileBodySchema = Type.Object(
   {
     displayName: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
     email: Type.Optional(Type.String({ format: 'email', maxLength: 320 })),
-    phone: Type.Optional(Type.Union([Type.String({ maxLength: 32 }), Type.Null()])),
+    phone: Type.Optional(Type.Union([e164PhoneSchema, Type.Null()])),
   },
   { additionalProperties: false, minProperties: 1 },
 );

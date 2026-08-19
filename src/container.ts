@@ -16,6 +16,7 @@ import { TripService } from './modules/trips/trip.service.js';
 import { VehicleService } from './modules/vehicles/vehicle.service.js';
 import { VendorService } from './modules/vendors/vendor.service.js';
 import { createFieldEncryptor } from './shared/security/field-encryption.js';
+import { DisabledPhotoStorage, R2PhotoStorage } from './shared/storage/photo-storage.js';
 
 export interface ApplicationServices {
   readonly authService: AuthService;
@@ -46,6 +47,7 @@ export function createApplicationServices(db: AppDatabase, config: AppConfig): A
   const questionnaireService = new QuestionnaireService(db);
   const settingsService = new SettingsService(db);
   const encryptor = createFieldEncryptor(config.dataEncryptionKey);
+  const photoStorage = config.r2 ? new R2PhotoStorage(config.r2) : new DisabledPhotoStorage();
   const feedbackService = new FeedbackService(
     db,
     questionnaireService,
@@ -53,12 +55,13 @@ export function createApplicationServices(db: AppDatabase, config: AppConfig): A
     encryptor,
     config.feedbackHandoffTtlHours,
     config.passengerFeedbackUrl,
+    photoStorage,
   );
   return {
     analyticsService: new AnalyticsService(db, settingsService),
-    adminFeedbackService: new AdminFeedbackService(db, encryptor, settingsService),
+    adminFeedbackService: new AdminFeedbackService(db, encryptor, settingsService, photoStorage),
     authService,
-    bookingService: new BookingService(db),
+    bookingService: new BookingService(db, encryptor),
     profileService: new ProfileService(db, passwordHasher),
     guards: createAuthGuards(authService, config.sessionCookieName, secureCookie),
     driverService: new DriverService(db, passwordHasher),

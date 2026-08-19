@@ -54,4 +54,11 @@ export const feedbackReviewState = pgEnum('feedback_review_state', [
   'ARCHIVED',
 ]);
 export const feedbackReviewAction = pgEnum('feedback_review_action', ['FLAG', 'UNFLAG', 'ARCHIVE']);
+export const feedbackPhotoStatus = pgEnum('feedback_photo_status', [
+  'PENDING',
+  'PROCESSING',
+  'READY',
+  'ATTACHED',
+  'REJECTED',
+]);
 export const outboxStatus = pgEnum('outbox_status', ['PENDING', 'PROCESSING', 'SENT', 'FAILED']);

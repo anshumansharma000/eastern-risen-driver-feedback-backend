@@ -3,6 +3,19 @@ import { resolveDatabaseConnection, type DatabaseSslMode } from './database-conn
 
 export type NodeEnvironment = 'development' | 'test' | 'production';
 
+export interface R2Config {
+  readonly accountId: string;
+  readonly bucketName: string;
+  readonly keyPrefix: string;
+  readonly accessKeyId: string;
+  readonly secretAccessKey: string;
+  readonly endpoint: string;
+  readonly uploadUrlTtlSeconds: number;
+  readonly downloadUrlTtlSeconds: number;
+  readonly maxUploadBytes: number;
+  readonly orphanTtlHours: number;
+}
+
 export interface AppConfig {
   readonly nodeEnv: NodeEnvironment;
   readonly host: string;
@@ -30,6 +43,7 @@ export interface AppConfig {
   readonly keepAliveTimeoutMs: number;
   readonly shutdownTimeoutMs: number;
   readonly bodyLimitBytes: number;
+  readonly r2: R2Config | null;
 }
 
 function parseNodeEnvironment(value: string | undefined): NodeEnvironment {
@@ -100,6 +114,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
   if (sessionRotationIntervalHours >= sessionIdleTtlHours) {
     throw new Error('SESSION_ROTATION_INTERVAL_HOURS must be less than SESSION_IDLE_TTL_HOURS');
   }
+  const r2 = parseR2Config(environment, nodeEnv);
 
   return {
     nodeEnv,
@@ -176,7 +191,68 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
       environment.BODY_LIMIT_BYTES,
       1_048_576,
     ),
+    r2,
   };
+}
+
+function parseR2Config(environment: NodeJS.ProcessEnv, nodeEnv: NodeEnvironment): R2Config | null {
+  const requiredValues = {
+    R2_ACCOUNT_ID: environment.R2_ACCOUNT_ID,
+    R2_BUCKET_NAME: environment.R2_BUCKET_NAME,
+    R2_ACCESS_KEY_ID: environment.R2_ACCESS_KEY_ID,
+    R2_SECRET_ACCESS_KEY: environment.R2_SECRET_ACCESS_KEY,
+  };
+  const configured = Object.values(requiredValues).some((value) => Boolean(value?.trim()));
+  const missing = Object.entries(requiredValues)
+    .filter(([, value]) => !value?.trim())
+    .map(([name]) => name);
+
+  if (!configured) {
+    if (nodeEnv === 'production') {
+      throw new Error(`${missing.join(', ')} are required in production`);
+    }
+    return null;
+  }
+  if (missing.length) throw new Error(`${missing.join(', ')} must be configured together`);
+
+  const accountId = requiredValues.R2_ACCOUNT_ID!.trim();
+  const defaultEndpoint = `https://${accountId}.r2.cloudflarestorage.com`;
+  return {
+    accountId,
+    bucketName: requiredValues.R2_BUCKET_NAME!.trim(),
+    keyPrefix: normalizeKeyPrefix(environment.R2_KEY_PREFIX ?? 'feedbackphotos'),
+    accessKeyId: requiredValues.R2_ACCESS_KEY_ID!.trim(),
+    secretAccessKey: requiredValues.R2_SECRET_ACCESS_KEY!.trim(),
+    endpoint: parseUrl('R2_ENDPOINT', environment.R2_ENDPOINT ?? defaultEndpoint),
+    uploadUrlTtlSeconds: parsePositiveInteger(
+      'R2_UPLOAD_URL_TTL_SECONDS',
+      environment.R2_UPLOAD_URL_TTL_SECONDS,
+      600,
+    ),
+    downloadUrlTtlSeconds: parsePositiveInteger(
+      'R2_DOWNLOAD_URL_TTL_SECONDS',
+      environment.R2_DOWNLOAD_URL_TTL_SECONDS,
+      300,
+    ),
+    maxUploadBytes: parsePositiveInteger(
+      'R2_MAX_UPLOAD_BYTES',
+      environment.R2_MAX_UPLOAD_BYTES,
+      10 * 1024 * 1024,
+    ),
+    orphanTtlHours: parsePositiveInteger(
+      'R2_ORPHAN_TTL_HOURS',
+      environment.R2_ORPHAN_TTL_HOURS,
+      24,
+    ),
+  };
+}
+
+function normalizeKeyPrefix(value: string): string {
+  const normalized = value.trim().replace(/^\/+|\/+$/g, '');
+  if (!normalized || normalized.includes('..')) {
+    throw new Error('R2_KEY_PREFIX must be a non-empty safe object-key prefix');
+  }
+  return normalized;
 }
 
 function parseUrl(name: string, value: string): string {

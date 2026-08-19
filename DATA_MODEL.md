@@ -19,7 +19,7 @@ It deliberately stops short of framework-specific migration code. The final data
 4. **Questionnaires are versioned.** Administrators edit drafts and publish immutable versions. Every response points to a published version and stores a complete immutable snapshot.
 5. **Offline retries are idempotent.** A client-generated submission ID is created before the first network attempt and has a server-enforced uniqueness constraint.
 6. **Rewards are server-authoritative.** Prize selection and coupon reservation occur online inside one database transaction.
-7. **Personal data is explicit.** Passenger contact data is isolated to feedback records, excluded from driver-facing reads, and encrypted at the application layer where appropriate.
+7. **Personal data is explicit.** Passenger contact data is stored on bookings and feedback records only where operationally required, excluded from driver-facing reads, and encrypted at the application layer.
 8. **Aggregates are derived.** Driver scores are calculated from immutable answers and are not manually editable.
 9. **Archive instead of delete.** Records referenced by history remain available for audit and reporting.
 10. **Time is unambiguous.** Persist timestamps in UTC and render them in the agency timezone, initially `Asia/Kolkata`.
@@ -121,7 +121,7 @@ Stores driver-specific profile and employment/source information.
 | `id` | UUID | No | Primary key |
 | `account_id` | UUID | No | Unique foreign key to `auth_accounts` with role `DRIVER` |
 | `driver_code` | text | No | Human-entered sign-in ID; normalized and unique |
-| `phone` | text | Yes | Operational contact, not passenger data |
+| `phone` | text | Yes | Operational contact; new writes use canonical E.164 |
 | `source_type` | enum | No | `AGENCY` or `OUTSOURCED` |
 | `vendor_id` | UUID | Yes | Required only for outsourced drivers |
 | `created_at` | timestamp | No | |
@@ -198,7 +198,7 @@ Represents companies that supply outsourced drivers.
 | `name` | text | No | Unique among non-archived vendors |
 | `contact_name` | text | Yes | Optional operational contact |
 | `contact_email` | text | Yes | |
-| `contact_phone` | text | Yes | |
+| `contact_phone` | text | Yes | New writes use canonical E.164 |
 | `status` | enum | No | `ACTIVE`, `DEACTIVATED`, `ARCHIVED` |
 | `created_at` | timestamp | No | |
 | `updated_at` | timestamp | No | |
@@ -440,7 +440,7 @@ Stores one immutable passenger submission per trip.
 | `vendor_name_snapshot` | text | Yes | Historical value |
 | `booking_reference_snapshot` | text | No | From trip at handoff |
 | `respondent_name` | text | No | Passenger-provided name |
-| `respondent_phone_ciphertext` | encrypted text | No | Application-encrypted where supported |
+| `respondent_phone_ciphertext` | encrypted text | No | Canonical E.164 encrypted by the application |
 | `respondent_phone_lookup_hash` | text | Yes | Optional keyed hash only if lookup is required |
 | `respondent_email_ciphertext` | encrypted text | No | Needed for reward delivery |
 | `respondent_email_lookup_hash` | text | Yes | Optional keyed hash for controlled lookup/deduplication |
@@ -516,7 +516,34 @@ Recommended canonical answer payloads:
 
 These are shape examples, not a single payload containing every type.
 
-### 9.3 `feedback_review_events`
+### 9.3 `feedback_photos`
+
+Tracks one optional private photo that may be attached to a feedback submission. Uploads
+begin under a temporary R2 object key and are verified, decoded, metadata-stripped, resized,
+and normalized to JPEG under a separate immutable object key before attachment.
+
+| Column | Logical type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | UUID | No | Client-visible upload identifier |
+| `trip_id` | UUID | No | Authorizes the upload against the handoff trip |
+| `feedback_submission_id` | UUID | Yes | Unique and populated only when attached |
+| `upload_object_key` | text | No | Private, temporary direct-upload key |
+| `object_key` | text | No | Private sanitized-object key |
+| `status` | enum | No | `PENDING`, `PROCESSING`, `READY`, `ATTACHED`, or `REJECTED` |
+| `declared_content_type` | text | No | MIME type signed for the raw upload |
+| `stored_content_type` | text | Yes | `image/jpeg` after sanitization |
+| `byte_size` | integer | Yes | Sanitized object size |
+| `upload_expires_at` | timestamp | No | Presigned upload deadline |
+| `temporary_object_cleaned_at` | timestamp | Yes | Cleanup audit marker |
+| `created_at` | timestamp | No | |
+| `completed_at` | timestamp | Yes | Sanitization completion |
+| `attached_at` | timestamp | Yes | Submission attachment time |
+
+Only `READY` photos can transition to `ATTACHED`. Temporary and unattached objects are
+removed by scheduled cleanup. R2 credentials and permanent public URLs are never exposed
+to passenger or administrator clients.
+
+### 9.4 `feedback_review_events`
 
 Provides an append-only record of administrative review actions.
 

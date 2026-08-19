@@ -103,10 +103,29 @@ export const adminFeedbackDetailSchema = Type.Intersect([
     consentVersionId: Type.String({ format: 'uuid' }),
     consentedAt: Type.String({ format: 'date-time' }),
     questionnaireVersionId: Type.String({ format: 'uuid' }),
+    photo: Type.Union([
+      Type.Object({
+        id: Type.String({ format: 'uuid' }),
+        contentType: Type.String(),
+        byteSize: Type.Integer(),
+        attachedAt: Type.String({ format: 'date-time' }),
+      }),
+      Type.Null(),
+    ]),
     answers: Type.Array(adminFeedbackAnswerSchema),
     reviewHistory: Type.Array(feedbackReviewEventSchema),
   }),
 ]);
+
+export const adminFeedbackPhotoAccessSchema = Type.Object({
+  data: Type.Object({
+    id: Type.String({ format: 'uuid' }),
+    url: Type.String({ format: 'uri' }),
+    expiresAt: Type.String({ format: 'date-time' }),
+    contentType: Type.String(),
+    byteSize: Type.Integer(),
+  }),
+});
 
 export const updateFeedbackReviewBodySchema = Type.Object(
   {

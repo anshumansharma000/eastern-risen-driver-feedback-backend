@@ -1,4 +1,5 @@
 import { Type } from 'typebox';
+import { e164PhoneSchema } from '../../shared/http/phone.schemas.js';
 import {
   consentSchema,
   questionCategorySchema,
@@ -80,6 +81,51 @@ export const feedbackLinkResponseSchema = Type.Object({
   }),
 });
 
+export const adminFeedbackShareResponseSchema = Type.Object({
+  data: Type.Object({
+    tripId: Type.String({ format: 'uuid' }),
+    feedbackLink: Type.String({ format: 'uri' }),
+    feedbackAccessTokenExpiresAt: Type.String({ format: 'date-time' }),
+    recipient: Type.Object({
+      name: Type.String(),
+      phone: Type.Union([e164PhoneSchema, Type.Null()]),
+    }),
+  }),
+});
+
+export const createPhotoUploadBodySchema = Type.Object(
+  {
+    contentType: Type.Union([
+      Type.Literal('image/jpeg'),
+      Type.Literal('image/png'),
+      Type.Literal('image/webp'),
+    ]),
+    sizeBytes: Type.Integer({ minimum: 1, maximum: 104_857_600 }),
+  },
+  { additionalProperties: false },
+);
+
+export const photoUploadResponseSchema = Type.Object({
+  data: Type.Object({
+    id: Type.String({ format: 'uuid' }),
+    uploadUrl: Type.String({ format: 'uri' }),
+    method: Type.Literal('PUT'),
+    headers: Type.Object({ 'Content-Type': Type.String() }),
+    expiresAt: Type.String({ format: 'date-time' }),
+    maxBytes: Type.Integer(),
+  }),
+});
+
+export const completedPhotoResponseSchema = Type.Object({
+  data: Type.Object({
+    id: Type.String({ format: 'uuid' }),
+    status: Type.Literal('READY'),
+    contentType: Type.Literal('image/jpeg'),
+    byteSize: Type.Integer(),
+    completedAt: Type.String({ format: 'date-time' }),
+  }),
+});
+
 // The question type determines the value shape; domain validation occurs against
 // the immutable questionnaire snapshot to avoid JSON-schema union coercion.
 const answerValueSchema = Type.Unknown();
@@ -92,7 +138,7 @@ export const submitFeedbackBodySchema = Type.Object(
     respondent: Type.Object(
       {
         name: Type.String({ minLength: 1, maxLength: 200 }),
-        phone: Type.String({ minLength: 1, maxLength: 32 }),
+        phone: e164PhoneSchema,
         email: Type.String({ format: 'email', maxLength: 320 }),
         bookingReference: Type.String({ minLength: 1, maxLength: 100 }),
         consentAccepted: Type.Literal(true),
@@ -112,6 +158,7 @@ export const submitFeedbackBodySchema = Type.Object(
     ),
     submittedAt: Type.String({ format: 'date-time' }),
     submissionMode: Type.Union([Type.Literal('ONLINE'), Type.Literal('OFFLINE_SYNC')]),
+    photoId: Type.Optional(Type.String({ format: 'uuid' })),
   },
   { additionalProperties: false },
 );

@@ -17,6 +17,7 @@ import { drivers } from './drivers.js';
 import {
   driverSourceType,
   feedbackReviewAction,
+  feedbackPhotoStatus,
   feedbackReviewState,
   feedbackSubmissionMode,
   questionCategory,
@@ -137,6 +138,48 @@ export const feedbackAnswers = pgTable(
       table.displayOrderSnapshot,
     ),
     index('feedback_answers_category_score_idx').on(table.categorySnapshot, table.numericScore),
+  ],
+);
+
+export const feedbackPhotos = pgTable(
+  'feedback_photos',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tripId: uuid('trip_id')
+      .notNull()
+      .references(() => trips.id, { onDelete: 'restrict' }),
+    feedbackSubmissionId: uuid('feedback_submission_id').references(() => feedbackSubmissions.id, {
+      onDelete: 'restrict',
+    }),
+    uploadObjectKey: text('upload_object_key').notNull(),
+    objectKey: text('object_key').notNull(),
+    status: feedbackPhotoStatus('status').notNull().default('PENDING'),
+    declaredContentType: text('declared_content_type').notNull(),
+    storedContentType: text('stored_content_type'),
+    byteSize: integer('byte_size'),
+    uploadExpiresAt: timestamp('upload_expires_at', { withTimezone: true }).notNull(),
+    temporaryObjectCleanedAt: timestamp('temporary_object_cleaned_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    attachedAt: timestamp('attached_at', { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex('feedback_photos_upload_object_key_unique').on(table.uploadObjectKey),
+    uniqueIndex('feedback_photos_object_key_unique').on(table.objectKey),
+    uniqueIndex('feedback_photos_submission_unique').on(table.feedbackSubmissionId),
+    index('feedback_photos_trip_status_idx').on(table.tripId, table.status),
+    index('feedback_photos_status_created_idx').on(table.status, table.createdAt),
+    index('feedback_photos_upload_cleanup_idx').on(
+      table.uploadExpiresAt,
+      table.temporaryObjectCleanedAt,
+    ),
+    check(
+      'feedback_photos_state_check',
+      sql`(${table.status} IN ('PENDING', 'PROCESSING') AND ${table.completedAt} IS NULL AND ${table.attachedAt} IS NULL AND ${table.feedbackSubmissionId} IS NULL)
+          OR (${table.status} = 'READY' AND ${table.completedAt} IS NOT NULL AND ${table.attachedAt} IS NULL AND ${table.feedbackSubmissionId} IS NULL)
+          OR (${table.status} = 'ATTACHED' AND ${table.completedAt} IS NOT NULL AND ${table.attachedAt} IS NOT NULL AND ${table.feedbackSubmissionId} IS NOT NULL)
+          OR (${table.status} = 'REJECTED' AND ${table.attachedAt} IS NULL AND ${table.feedbackSubmissionId} IS NULL)`,
+    ),
   ],
 );
 

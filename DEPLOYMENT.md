@@ -73,8 +73,19 @@ Configure these application values:
 - `SESSION_ABSOLUTE_TTL_DAYS=30`
 - `SESSION_ROTATION_INTERVAL_HOURS=24`
 - `SESSION_ROTATION_GRACE_SECONDS=60`
+- `R2_ACCOUNT_ID` for the Cloudflare account owning the private bucket
+- `R2_BUCKET_NAME=easternrisen`
+- `R2_KEY_PREFIX=feedbackphotos`
+- `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY` as encrypted deployment secrets
+- `R2_ENDPOINT` using the exact standard or jurisdiction-specific Cloudflare endpoint
+- `R2_UPLOAD_URL_TTL_SECONDS=600`
+- `R2_DOWNLOAD_URL_TTL_SECONDS=300`
+- `R2_MAX_UPLOAD_BYTES=10485760`
+- `R2_ORPHAN_TTL_HOURS=24`
 
 Keep secrets out of Git, build arguments, Docker images, and log messages.
+Keep the R2 bucket private and configure its CORS policy with the exact passenger and
+admin frontend origins. Schedule `npm run photos:cleanup` at least hourly.
 
 ## 4. Create the App Platform backend
 

@@ -3,7 +3,7 @@
 **Service:** Eastern Risen Driver Feedback API  
 **Contract version:** `0.1.0`  
 **Reference status:** Derived from implemented backend routes and TypeBox schemas  
-**Last verified:** 2026-07-25
+**Last verified:** 2026-08-18
 **API prefix:** `/api/v1`  
 **Local backend:** `http://localhost:3000`
 
@@ -232,7 +232,7 @@ type UpdateAdminProfileRequest = Partial<{
 type UpdateDriverProfileRequest = Partial<{
   displayName: string;
   email: string;
-  phone: string | null;
+  phone: string | null; // canonical E.164 when non-null
 }>; // at least one property
 
 interface ChangePasswordRequest {
@@ -314,7 +314,7 @@ interface CreateVendorRequest {
   name: string; // 1–200
   contactName?: string; // max 200
   contactEmail?: string; // email, max 320
-  contactPhone?: string; // max 32
+  contactPhone?: string; // canonical E.164
 }
 
 type UpdateVendorRequest = Partial<{
@@ -389,7 +389,7 @@ interface CreateDriverRequest {
   email: string; // email, max 320
   password: string; // 12–128
   driverCode: string; // 1–64
-  phone?: string; // max 32
+  phone?: string; // canonical E.164
   sourceType: DriverSource;
   vendorId?: string | null;
   assignmentEnabled?: boolean; // defaults to true
@@ -464,7 +464,61 @@ type UpdateVehicleRequest = Partial<CreateVehicleRequest>; // at least one prope
 
 List query and status body match vendors. Relevant errors: `VEHICLE_NOT_FOUND`, `VEHICLE_REGISTRATION_ALREADY_EXISTS`.
 
-## 8. Trips
+## 8. Admin bookings
+
+All routes require an admin session.
+
+| Method | Path | Success | Request |
+| --- | --- | --- | --- |
+| `GET` | `/api/v1/admin/bookings` | `200` paginated | `status?`, `page?`, `pageSize?` |
+| `GET` | `/api/v1/admin/bookings/:id` | `200` resource with trips | — |
+| `POST` | `/api/v1/admin/bookings` | `201` resource | Create body |
+| `PATCH` | `/api/v1/admin/bookings/:id` | `200` resource | Partial update |
+| `POST` | `/api/v1/admin/bookings/:id/archive` | `200` resource | No body |
+
+```ts
+interface Booking {
+  id: string;
+  bookingReference: string;
+  passengerName: string;
+  passengerPhone: string | null;
+  startsAt: string;
+  endsAt: string;
+  status: 'ACTIVE' | 'COMPLETED' | 'CANCELLED' | 'ARCHIVED';
+  notes: string | null;
+  tripCount: number;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt: string | null;
+}
+
+interface CreateBookingRequest {
+  bookingReference: string;
+  passengerName: string;
+  passengerPhone: string; // E.164: ^\\+[1-9]\\d{7,14}$
+  startsAt: string;
+  endsAt: string;
+  notes?: string | null;
+}
+
+type UpdateBookingRequest = Partial<{
+  bookingReference: string;
+  passengerName: string;
+  passengerPhone: string; // E.164: ^\\+[1-9]\\d{7,14}$
+  startsAt: string;
+  endsAt: string;
+  notes: string | null;
+  status: 'ACTIVE' | 'COMPLETED' | 'CANCELLED';
+}>; // at least one property
+```
+
+`passengerPhone` is required when creating a booking. It can be `null` in reads
+only for bookings created before this field was introduced. The update endpoint
+can add or replace a legacy number but does not accept `null` to remove it.
+Submit a canonical E.164 number including `+` and country code; do not send
+spaces, parentheses, or hyphens.
+
+## 9. Trips
 
 ### Trip resource
 
@@ -520,6 +574,7 @@ All require an admin session.
 | `POST` | `/api/v1/admin/trips` | `201` resource | `TripFields & { driverId: string }` |
 | `PATCH` | `/api/v1/admin/trips/:id` | `200` resource | Partial trip fields, optional `driverId`; at least one |
 | `POST` | `/api/v1/admin/trips/:id/archive` | `200` resource | No body |
+| `GET` | `/api/v1/admin/trips/:id/feedback-link` | `200` share data | — |
 
 Admin list query:
 
@@ -535,6 +590,29 @@ assignment-enabled driver, an active vehicle, no driver/vehicle overlap, no
 overlapping driver leave, a schedule contained by the configured shift, and
 enough remaining duty minutes for the driver’s local calendar day. An
 outsourced driver also requires an active vendor.
+
+The admin feedback-link endpoint issues or reuses the trip's feedback handoff
+and returns the recipient needed for a client-side WhatsApp share:
+
+```ts
+interface AdminFeedbackShareResponse {
+  data: {
+    tripId: string;
+    feedbackLink: string;
+    feedbackAccessTokenExpiresAt: string;
+    recipient: {
+      name: string;
+      phone: string | null;
+    };
+  };
+}
+```
+
+The frontend must convert the E.164 phone to digits only for `wa.me`, encode the
+entire message with `encodeURIComponent`, and open the resulting URL from the
+administrator's explicit click. The API does not contact WhatsApp or record a
+delivery status. Treat `feedbackLink` as a secret bearer URL: do not log it or
+send it to analytics/error-reporting payloads.
 
 ### Driver trip endpoints
 
@@ -573,7 +651,7 @@ Other relevant errors: `TRIP_NOT_FOUND`, `TRIP_NOT_EDITABLE`,
 `ACTIVE_VEHICLE_NOT_FOUND`, `FEEDBACK_HANDOFF_UNAVAILABLE`,
 `ACTIVE_QUESTIONNAIRE_NOT_FOUND`, and `ACTIVE_CONSENT_NOT_FOUND`.
 
-## 9. Admin questionnaires and consent
+## 10. Admin questionnaires and consent
 
 All routes require an admin session.
 
@@ -798,7 +876,7 @@ interface SubmitFeedbackRequest {
   questionnaireSnapshot: PassengerContext['questionnaire'];
   respondent: {
     name: string; // 1–200
-    phone: string; // 1–32
+    phone: string; // canonical E.164
     email: string; // valid email, max 320
     bookingReference: string; // 1–100, must match trip ignoring case/outer whitespace
     consentAccepted: true;
@@ -807,8 +885,45 @@ interface SubmitFeedbackRequest {
   answers: FeedbackAnswer[]; // max 100
   submittedAt: string;
   submissionMode: SubmissionMode;
+  photoId?: string; // READY photo upload UUID; omit when the customer skips the photo
 }
 ```
+
+### Optional feedback photo
+
+The passenger may take a photo or choose one from the device library. Supported input
+types are JPEG, PNG, and WebP; the configured default maximum is 10 MiB. The feature is
+optional and requires connectivity.
+
+First create an upload intent using the feedback bearer token:
+
+```http
+POST /api/v1/passenger/feedback/photo-uploads
+Authorization: Bearer <feedbackAccessToken>
+Content-Type: application/json
+
+{"contentType":"image/jpeg","sizeBytes":2451234}
+```
+
+The `201` response contains `id`, `uploadUrl`, `method: "PUT"`, required `headers`,
+`expiresAt`, and `maxBytes`. Upload the raw file directly to `uploadUrl` using exactly
+the returned method and headers. Do not send the feedback bearer token or cookies to R2.
+
+After a successful R2 response, complete verification and sanitization:
+
+```http
+POST /api/v1/passenger/feedback/photo-uploads/<photo-id>/complete
+Authorization: Bearer <feedbackAccessToken>
+```
+
+The `200` response reports `status: "READY"`, normalized `contentType: "image/jpeg"`,
+`byteSize`, and `completedAt`. Only then include the photo ID as `photoId` in the final
+submission. Omit `photoId` entirely when skipped. Failed photo upload must never block
+the customer from submitting feedback without a photo.
+
+Relevant photo errors: `PHOTO_TOO_LARGE`, `PHOTO_STORAGE_UNAVAILABLE`,
+`PHOTO_UPLOAD_MISSING`, `PHOTO_INVALID`, `PHOTO_UPLOAD_REJECTED`, `PHOTO_NOT_READY`,
+`PHOTO_ATTACHMENT_CONFLICT`, and `PHOTO_UPLOAD_NOT_FOUND`.
 
 ### Submission receipt
 
