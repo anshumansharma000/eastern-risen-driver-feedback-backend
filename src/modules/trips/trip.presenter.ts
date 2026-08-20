@@ -16,12 +16,15 @@ export interface TripView {
   readonly vendorId: string | null;
   readonly vendorNameSnapshot: string | null;
   readonly creationSource: 'ADMIN_ASSIGNED' | 'DRIVER_ENTERED';
+  readonly feedbackPurposes: readonly QuestionnairePurpose[];
   readonly status: 'READY' | 'FEEDBACK_STARTED' | 'SUBMITTED' | 'ARCHIVED';
   readonly startedFeedbackAt: Date | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
   readonly archivedAt: Date | null;
 }
+
+type QuestionnairePurpose = 'ARRIVAL_EXPERIENCE' | 'DRIVER_FEEDBACK' | 'TOUR_EXPERIENCE';
 
 export function presentTrip(trip: TripView) {
   return {
@@ -45,6 +48,7 @@ export function presentTrip(trip: TripView) {
       vendorName: trip.vendorNameSnapshot,
     },
     creationSource: trip.creationSource,
+    feedbackPurposes: [...trip.feedbackPurposes],
     status: trip.status,
     startedFeedbackAt: trip.startedFeedbackAt?.toISOString() ?? null,
     createdAt: trip.createdAt.toISOString(),

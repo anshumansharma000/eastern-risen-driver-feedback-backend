@@ -18,6 +18,9 @@ export interface FeedbackQuestion {
     | 'CLEANLINESS'
     | 'PROFESSIONALISM'
     | 'VEHICLE_CONDITION'
+    | 'ARRIVAL_EXPERIENCE'
+    | 'TOUR_EXPERIENCE'
+    | 'TOUR_COORDINATION'
     | 'CUSTOM';
   readonly status: 'ACTIVE' | 'INACTIVE' | 'ARCHIVED';
   readonly isRequired: boolean;
@@ -31,8 +34,18 @@ export interface FeedbackQuestion {
 export interface FeedbackQuestionnaireVersion {
   readonly id: string;
   readonly questionnaireId: string;
+  readonly questionnaireName?: string;
+  readonly purpose?: QuestionnairePurpose;
   readonly versionNumber: number;
   readonly questions: readonly FeedbackQuestion[];
+}
+
+export type QuestionnairePurpose = 'ARRIVAL_EXPERIENCE' | 'DRIVER_FEEDBACK' | 'TOUR_EXPERIENCE';
+
+export interface FeedbackQuestionnaireSection {
+  readonly purpose: QuestionnairePurpose;
+  readonly displayOrder: number;
+  readonly version: FeedbackQuestionnaireVersion;
 }
 
 export function buildQuestionnaireSnapshot(version: FeedbackQuestionnaireVersion) {
@@ -61,4 +74,40 @@ export function buildQuestionnaireSnapshot(version: FeedbackQuestionnaireVersion
         })),
       })),
   };
+}
+
+export function buildCompositeQuestionnaireSnapshot(
+  sections: readonly FeedbackQuestionnaireSection[],
+) {
+  return {
+    schemaVersion: 2 as const,
+    sections: [...sections]
+      .sort((left, right) => left.displayOrder - right.displayOrder)
+      .map(({ purpose, version }) => ({
+        purpose,
+        title: sectionTitle(purpose),
+        questionnaireId: version.questionnaireId,
+        questionnaireVersionId: version.id,
+        versionNumber: version.versionNumber,
+        questions: buildQuestionnaireSnapshot(version).questions,
+      })),
+  };
+}
+
+export function flattenCompositeQuestions(
+  snapshot: ReturnType<typeof buildCompositeQuestionnaireSnapshot>,
+) {
+  return snapshot.sections.flatMap((section) =>
+    section.questions.map((question) => ({
+      ...question,
+      status: 'ACTIVE' as const,
+      questionnairePurpose: section.purpose,
+    })),
+  );
+}
+
+function sectionTitle(purpose: QuestionnairePurpose) {
+  if (purpose === 'ARRIVAL_EXPERIENCE') return 'Arrival and booking experience';
+  if (purpose === 'TOUR_EXPERIENCE') return 'Tour coordination and experience';
+  return 'Driver feedback';
 }

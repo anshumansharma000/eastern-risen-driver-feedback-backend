@@ -4,6 +4,7 @@ import { paginationSchema } from '../../shared/http/response.schemas.js';
 import type { AuthGuards } from '../auth/auth.guard.js';
 import {
   adminFeedbackDetailSchema,
+  adminFeedbackDetailQuerySchema,
   adminFeedbackPhotoAccessSchema,
   adminFeedbackListQuerySchema,
   adminFeedbackSummarySchema,
@@ -46,6 +47,7 @@ export const adminFeedbackRoutes: FastifyPluginAsyncTypebox<AdminFeedbackRouteOp
       const result = await options.adminFeedbackService.list({
         page,
         pageSize,
+        view: request.query.view ?? 'DRIVER',
         ...(request.query.month ? { month: request.query.month } : {}),
         ...(request.query.driverId ? { driverId: request.query.driverId } : {}),
         ...(request.query.driverSource ? { driverSource: request.query.driverSource } : {}),
@@ -99,11 +101,14 @@ export const adminFeedbackRoutes: FastifyPluginAsyncTypebox<AdminFeedbackRouteOp
         tags: ['feedback review'],
         summary: 'Inspect one immutable feedback submission and its review history',
         params: idParamsSchema,
+        querystring: adminFeedbackDetailQuerySchema,
         response: { 200: Type.Object({ data: adminFeedbackDetailSchema }) },
       },
     },
     async (request) => ({
-      data: serializeDetail(await options.adminFeedbackService.get(request.params.id)),
+      data: serializeDetail(
+        await options.adminFeedbackService.get(request.params.id, request.query.view ?? 'DRIVER'),
+      ),
     }),
   );
 
@@ -187,7 +192,7 @@ function serializeDetail(result: Awaited<ReturnType<AdminFeedbackService['get']>
     },
     consentVersionId: submission.consentVersionId,
     consentedAt: submission.consentedAt.toISOString(),
-    questionnaireVersionId: submission.questionnaireVersionId,
+    questionnaireSections: result.sections,
     photo: result.photo
       ? {
           ...result.photo,
@@ -203,6 +208,7 @@ function serializeDetail(result: Awaited<ReturnType<AdminFeedbackService['get']>
       prompt: answer.questionPromptSnapshot,
       questionType: answer.questionTypeSnapshot,
       category: answer.categorySnapshot,
+      purpose: answer.questionnairePurposeSnapshot,
       displayOrder: answer.displayOrderSnapshot,
       value: answer.answerPayload,
       numericScore: answer.numericScore,

@@ -6,6 +6,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   unique,
@@ -20,6 +21,7 @@ import {
   feedbackPhotoStatus,
   feedbackReviewState,
   feedbackSubmissionMode,
+  questionnairePurpose,
   questionCategory,
   questionType,
 } from './enums.js';
@@ -35,9 +37,10 @@ export const feedbackHandoffs = pgTable(
       .notNull()
       .unique()
       .references(() => trips.id, { onDelete: 'cascade' }),
-    questionnaireVersionId: uuid('questionnaire_version_id')
-      .notNull()
-      .references(() => questionnaireVersions.id, { onDelete: 'restrict' }),
+    questionnaireVersionId: uuid('questionnaire_version_id').references(
+      () => questionnaireVersions.id,
+      { onDelete: 'restrict' },
+    ),
     consentVersionId: uuid('consent_version_id')
       .notNull()
       .references(() => consentVersions.id, { onDelete: 'restrict' }),
@@ -50,6 +53,30 @@ export const feedbackHandoffs = pgTable(
   (table) => [
     uniqueIndex('feedback_handoffs_token_hash_unique').on(table.tokenHash),
     index('feedback_handoffs_expiry_idx').on(table.expiresAt),
+  ],
+);
+
+export const feedbackHandoffSections = pgTable(
+  'feedback_handoff_sections',
+  {
+    handoffId: uuid('handoff_id')
+      .notNull()
+      .references(() => feedbackHandoffs.id, { onDelete: 'cascade' }),
+    purpose: questionnairePurpose('purpose').notNull(),
+    questionnaireVersionId: uuid('questionnaire_version_id')
+      .notNull()
+      .references(() => questionnaireVersions.id, { onDelete: 'restrict' }),
+    displayOrder: integer('display_order').notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: 'feedback_handoff_sections_handoff_purpose_pk',
+      columns: [table.handoffId, table.purpose],
+    }),
+    unique('feedback_handoff_sections_handoff_order_unique').on(
+      table.handoffId,
+      table.displayOrder,
+    ),
   ],
 );
 
@@ -77,9 +104,10 @@ export const feedbackSubmissions = pgTable(
       .notNull()
       .references(() => consentVersions.id, { onDelete: 'restrict' }),
     consentedAt: timestamp('consented_at', { withTimezone: true }).notNull(),
-    questionnaireVersionId: uuid('questionnaire_version_id')
-      .notNull()
-      .references(() => questionnaireVersions.id, { onDelete: 'restrict' }),
+    questionnaireVersionId: uuid('questionnaire_version_id').references(
+      () => questionnaireVersions.id,
+      { onDelete: 'restrict' },
+    ),
     questionnaireSnapshot: jsonb('questionnaire_snapshot')
       .$type<Record<string, unknown>>()
       .notNull(),
@@ -109,6 +137,33 @@ export const feedbackSubmissions = pgTable(
   ],
 );
 
+export const feedbackSubmissionSections = pgTable(
+  'feedback_submission_sections',
+  {
+    feedbackSubmissionId: uuid('feedback_submission_id')
+      .notNull()
+      .references(() => feedbackSubmissions.id, { onDelete: 'restrict' }),
+    purpose: questionnairePurpose('purpose').notNull(),
+    questionnaireVersionId: uuid('questionnaire_version_id')
+      .notNull()
+      .references(() => questionnaireVersions.id, { onDelete: 'restrict' }),
+    questionnaireSnapshot: jsonb('questionnaire_snapshot')
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    displayOrder: integer('display_order').notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: 'feedback_submission_sections_submission_purpose_pk',
+      columns: [table.feedbackSubmissionId, table.purpose],
+    }),
+    unique('feedback_submission_sections_submission_order_unique').on(
+      table.feedbackSubmissionId,
+      table.displayOrder,
+    ),
+  ],
+);
+
 export const feedbackAnswers = pgTable(
   'feedback_answers',
   {
@@ -123,6 +178,9 @@ export const feedbackAnswers = pgTable(
     questionPromptSnapshot: text('question_prompt_snapshot').notNull(),
     questionTypeSnapshot: questionType('question_type_snapshot').notNull(),
     categorySnapshot: questionCategory('category_snapshot').notNull(),
+    questionnairePurposeSnapshot: questionnairePurpose('questionnaire_purpose_snapshot')
+      .notNull()
+      .default('DRIVER_FEEDBACK'),
     displayOrderSnapshot: integer('display_order_snapshot').notNull(),
     answerPayload: jsonb('answer_payload').$type<Record<string, unknown>>().notNull(),
     numericScore: doublePrecision('numeric_score'),

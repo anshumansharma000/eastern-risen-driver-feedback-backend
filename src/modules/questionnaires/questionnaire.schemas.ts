@@ -25,7 +25,16 @@ export const questionCategorySchema = Type.Union([
   Type.Literal('CLEANLINESS'),
   Type.Literal('PROFESSIONALISM'),
   Type.Literal('VEHICLE_CONDITION'),
+  Type.Literal('ARRIVAL_EXPERIENCE'),
+  Type.Literal('TOUR_EXPERIENCE'),
+  Type.Literal('TOUR_COORDINATION'),
   Type.Literal('CUSTOM'),
+]);
+
+export const questionnairePurposeSchema = Type.Union([
+  Type.Literal('ARRIVAL_EXPERIENCE'),
+  Type.Literal('DRIVER_FEEDBACK'),
+  Type.Literal('TOUR_EXPERIENCE'),
 ]);
 
 export const questionStatusSchema = Type.Union([
@@ -62,6 +71,7 @@ export const questionInputSchema = Type.Object(
 export const createQuestionnaireBodySchema = Type.Object(
   {
     name: Type.String({ minLength: 1, maxLength: 200 }),
+    purpose: questionnairePurposeSchema,
   },
   { additionalProperties: false },
 );
@@ -90,6 +100,7 @@ export const consentBodySchema = Type.Object(
 export const questionnaireSummarySchema = Type.Object({
   id: Type.String({ format: 'uuid' }),
   name: Type.String(),
+  purpose: questionnairePurposeSchema,
   status: Type.Union([Type.Literal('ACTIVE'), Type.Literal('ARCHIVED')]),
   createdAt: Type.String({ format: 'date-time' }),
   updatedAt: Type.String({ format: 'date-time' }),
@@ -123,6 +134,7 @@ export const questionnaireVersionSchema = Type.Object({
   id: Type.String({ format: 'uuid' }),
   questionnaireId: Type.String({ format: 'uuid' }),
   questionnaireName: Type.String(),
+  purpose: questionnairePurposeSchema,
   versionNumber: Type.Integer(),
   status: Type.Union([
     Type.Literal('DRAFT'),

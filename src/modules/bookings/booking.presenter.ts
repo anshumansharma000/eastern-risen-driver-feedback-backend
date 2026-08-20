@@ -1,6 +1,8 @@
 export function presentBooking(booking: {
   id: string;
   bookingReference: string;
+  tourName: string | null;
+  fileNumber: string | null;
   passengerName: string;
   passengerPhone: string | null;
   startsAt: Date;

@@ -5,9 +5,12 @@ import type { AppDatabase } from '../../database/client.js';
 import {
   feedbackAnswers,
   feedbackHandoffs,
+  feedbackHandoffSections,
   feedbackPhotos,
   feedbackSubmissions,
+  feedbackSubmissionSections,
   bookings,
+  tripFeedbackSections,
   trips,
 } from '../../database/schema/index.js';
 import { isPostgresError } from '../../shared/database/postgres-error.js';
@@ -21,11 +24,15 @@ import {
 import type { QuestionnaireService } from '../questionnaires/questionnaire.service.js';
 import type { SettingsService } from '../settings/settings.service.js';
 import { validateFeedbackAnswers } from './answer.validator.js';
-import { buildQuestionnaireSnapshot } from './questionnaire-snapshot.js';
+import {
+  buildCompositeQuestionnaireSnapshot,
+  buildQuestionnaireSnapshot,
+  flattenCompositeQuestions,
+  type FeedbackQuestionnaireSection,
+} from './questionnaire-snapshot.js';
 
 export interface SubmitFeedbackInput {
   readonly clientSubmissionId: string;
-  readonly questionnaireVersionId: string;
   readonly questionnaireSnapshot: unknown;
   readonly respondent: {
     readonly name: string;
@@ -70,6 +77,9 @@ export class FeedbackService {
           statusCode: 409,
         });
       }
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtextextended(${'booking:' + trip.bookingId}, 0))`,
+      );
 
       const [existingHandoff] = await tx
         .select()
@@ -87,8 +97,22 @@ export class FeedbackService {
         };
       }
 
-      const [version, consent] = await Promise.all([
-        this.questionnaires.getActiveVersion(),
+      const assignedSections = await tx
+        .select({ purpose: tripFeedbackSections.purpose })
+        .from(tripFeedbackSections)
+        .where(eq(tripFeedbackSections.tripId, tripId))
+        .orderBy(sectionOrderSql(tripFeedbackSections.purpose));
+      if (!assignedSections.length) {
+        throw new AppError({
+          code: 'TRIP_FEEDBACK_SECTIONS_REQUIRED',
+          message: 'Select at least one feedback section before sharing feedback',
+          statusCode: 409,
+        });
+      }
+      const [versions, consent] = await Promise.all([
+        Promise.all(
+          assignedSections.map(({ purpose }) => this.questionnaires.getActiveVersion(purpose)),
+        ),
         this.questionnaires.getActiveConsent(),
       ]);
       const token = randomBytes(32).toString('base64url');
@@ -96,11 +120,13 @@ export class FeedbackService {
       const tokenCiphertext = this.encryptor.encrypt(token);
       const expiresAt = new Date(now.getTime() + this.handoffTtlHours * 60 * 60 * 1000);
 
+      let handoffId: string;
       if (existingHandoff) {
+        handoffId = existingHandoff.id;
         await tx
           .update(feedbackHandoffs)
           .set({
-            questionnaireVersionId: version.id,
+            questionnaireVersionId: null,
             consentVersionId: consent.id,
             tokenHash,
             tokenCiphertext,
@@ -108,16 +134,33 @@ export class FeedbackService {
             consumedAt: null,
           })
           .where(eq(feedbackHandoffs.id, existingHandoff.id));
+        await tx
+          .delete(feedbackHandoffSections)
+          .where(eq(feedbackHandoffSections.handoffId, existingHandoff.id));
       } else {
-        await tx.insert(feedbackHandoffs).values({
-          tripId,
-          questionnaireVersionId: version.id,
-          consentVersionId: consent.id,
-          tokenHash,
-          tokenCiphertext,
-          expiresAt,
-        });
+        const [createdHandoff] = await tx
+          .insert(feedbackHandoffs)
+          .values({
+            tripId,
+            questionnaireVersionId: null,
+            consentVersionId: consent.id,
+            tokenHash,
+            tokenCiphertext,
+            expiresAt,
+          })
+          .returning({ id: feedbackHandoffs.id });
+        if (!createdHandoff) throw new Error('Feedback handoff insert did not return a row');
+        handoffId = createdHandoff.id;
       }
+
+      await tx.insert(feedbackHandoffSections).values(
+        versions.map((version, displayOrder) => ({
+          handoffId,
+          purpose: assignedSections[displayOrder]!.purpose,
+          questionnaireVersionId: version.id,
+          displayOrder,
+        })),
+      );
 
       return { tripId, token, expiresAt, link: this.buildHandoffLink(token) };
     });
@@ -125,14 +168,20 @@ export class FeedbackService {
 
   async getContext(token: string) {
     const handoff = await this.resolveHandoff(token, true);
-    const [trip, version, settings] = await Promise.all([
+    const [trip, questionnaireSections, settings] = await Promise.all([
       this.getTrip(handoff.tripId),
-      this.questionnaires.getVersionById(handoff.questionnaireVersionId),
+      this.loadQuestionnaireSections(handoff),
       this.settings.get(),
     ]);
     const consent = await this.questionnaires.getConsentById(handoff.consentVersionId);
     if (trip.status !== 'READY' && trip.status !== 'FEEDBACK_STARTED') this.invalidHandoff();
-    return { trip, version, consent, settings, snapshot: buildQuestionnaireSnapshot(version) };
+    return {
+      trip,
+      questionnaireSections,
+      consent,
+      settings,
+      snapshot: buildCompositeQuestionnaireSnapshot(questionnaireSections),
+    };
   }
 
   async start(token: string) {
@@ -391,15 +440,9 @@ export class FeedbackService {
         statusCode: 409,
       });
     if (handoff.consumedAt || handoff.expiresAt <= this.now()) this.invalidHandoff();
-    if (input.questionnaireVersionId !== handoff.questionnaireVersionId)
-      throw new AppError({
-        code: 'QUESTIONNAIRE_VERSION_INVALID',
-        message: 'The questionnaire version does not match this handoff',
-        statusCode: 409,
-      });
-    const [trip, version] = await Promise.all([
+    const [trip, questionnaireSections] = await Promise.all([
       this.getTrip(handoff.tripId),
-      this.questionnaires.getVersionById(handoff.questionnaireVersionId),
+      this.loadQuestionnaireSections(handoff),
     ]);
     if (trip.status !== 'FEEDBACK_STARTED') this.unavailableHandoff();
     if (
@@ -412,7 +455,7 @@ export class FeedbackService {
         statusCode: 400,
       });
     }
-    const snapshot = buildQuestionnaireSnapshot(version);
+    const snapshot = buildCompositeQuestionnaireSnapshot(questionnaireSections);
     if (!isDeepStrictEqual(input.questionnaireSnapshot, snapshot)) {
       throw new AppError({
         code: 'QUESTIONNAIRE_SNAPSHOT_INVALID',
@@ -420,7 +463,10 @@ export class FeedbackService {
         statusCode: 409,
       });
     }
-    const normalizedAnswers = validateFeedbackAnswers(version.questions, input.answers);
+    const normalizedAnswers = validateFeedbackAnswers(
+      flattenCompositeQuestions(snapshot),
+      input.answers,
+    );
     try {
       const submission = await this.db.transaction(async (tx) => {
         let photoToAttach: typeof feedbackPhotos.$inferSelect | undefined;
@@ -458,13 +504,22 @@ export class FeedbackService {
             respondentBookingReference: input.respondent.bookingReference.trim(),
             consentVersionId: handoff.consentVersionId,
             consentedAt: new Date(input.respondent.consentedAt),
-            questionnaireVersionId: handoff.questionnaireVersionId,
+            questionnaireVersionId: null,
             questionnaireSnapshot: snapshot,
             submittedAt: new Date(input.submittedAt),
             submissionMode: input.submissionMode,
           })
           .returning();
         if (!created) throw new Error('Feedback insert did not return a row');
+        await tx.insert(feedbackSubmissionSections).values(
+          questionnaireSections.map((section) => ({
+            feedbackSubmissionId: created.id,
+            purpose: section.purpose,
+            questionnaireVersionId: section.version.id,
+            questionnaireSnapshot: buildQuestionnaireSnapshot(section.version),
+            displayOrder: section.displayOrder,
+          })),
+        );
         if (normalizedAnswers.length)
           await tx.insert(feedbackAnswers).values(
             normalizedAnswers.map((answer) => ({
@@ -538,6 +593,37 @@ export class FeedbackService {
     if (!handoff || (enforceUsable && (handoff.consumedAt || handoff.expiresAt <= this.now())))
       this.invalidHandoff();
     return handoff;
+  }
+
+  private async loadQuestionnaireSections(
+    handoff: typeof feedbackHandoffs.$inferSelect,
+  ): Promise<FeedbackQuestionnaireSection[]> {
+    const rows = await this.db
+      .select({
+        purpose: feedbackHandoffSections.purpose,
+        questionnaireVersionId: feedbackHandoffSections.questionnaireVersionId,
+        displayOrder: feedbackHandoffSections.displayOrder,
+      })
+      .from(feedbackHandoffSections)
+      .where(eq(feedbackHandoffSections.handoffId, handoff.id))
+      .orderBy(feedbackHandoffSections.displayOrder);
+    if (!rows.length && handoff.questionnaireVersionId) {
+      return [
+        {
+          purpose: 'DRIVER_FEEDBACK',
+          displayOrder: 0,
+          version: await this.questionnaires.getVersionById(handoff.questionnaireVersionId),
+        },
+      ];
+    }
+    if (!rows.length) this.invalidHandoff();
+    return Promise.all(
+      rows.map(async (row) => ({
+        purpose: row.purpose,
+        displayOrder: row.displayOrder,
+        version: await this.questionnaires.getVersionById(row.questionnaireVersionId),
+      })),
+    );
   }
 
   private async getTrip(id: string) {
@@ -625,6 +711,15 @@ function isNotFoundStorageError(error: unknown): boolean {
 function hashToken(token: string) {
   return createHash('sha256').update(token).digest('hex');
 }
+
+function sectionOrderSql(column: typeof tripFeedbackSections.purpose) {
+  return sql`case ${column}
+    when 'ARRIVAL_EXPERIENCE' then 0
+    when 'DRIVER_FEEDBACK' then 1
+    when 'TOUR_EXPERIENCE' then 2
+  end`;
+}
+
 function receipt(
   row: {
     id: string;

@@ -1,9 +1,19 @@
 import { sql } from 'drizzle-orm';
-import { check, index, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import {
+  check,
+  index,
+  jsonb,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from 'drizzle-orm/pg-core';
 import { authAccounts } from './accounts.js';
 import { bookings } from './bookings.js';
 import { drivers } from './drivers.js';
-import { driverSourceType, tripCreationSource, tripStatus } from './enums.js';
+import { driverSourceType, questionnairePurpose, tripCreationSource, tripStatus } from './enums.js';
 import { vehicles } from './vehicles.js';
 import { vendors } from './vendors.js';
 
@@ -64,5 +74,32 @@ export const trips = pgTable(
       sql`(${table.status} = 'ARCHIVED' AND ${table.archivedAt} IS NOT NULL)
           OR (${table.status} <> 'ARCHIVED' AND ${table.archivedAt} IS NULL)`,
     ),
+  ],
+);
+
+export const tripFeedbackSections = pgTable(
+  'trip_feedback_sections',
+  {
+    tripId: uuid('trip_id')
+      .notNull()
+      .references(() => trips.id, { onDelete: 'cascade' }),
+    bookingId: uuid('booking_id')
+      .notNull()
+      .references(() => bookings.id, { onDelete: 'cascade' }),
+    purpose: questionnairePurpose('purpose').notNull(),
+    assignedByAccountId: uuid('assigned_by_account_id')
+      .notNull()
+      .references(() => authAccounts.id, { onDelete: 'restrict' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: 'trip_feedback_sections_trip_purpose_pk',
+      columns: [table.tripId, table.purpose],
+    }),
+    index('trip_feedback_sections_booking_idx').on(table.bookingId),
+    uniqueIndex('trip_feedback_sections_booking_boundary_unique')
+      .on(table.bookingId, table.purpose)
+      .where(sql`${table.purpose} IN ('ARRIVAL_EXPERIENCE', 'TOUR_EXPERIENCE')`),
   ],
 );

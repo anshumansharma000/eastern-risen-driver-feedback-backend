@@ -16,6 +16,7 @@ import { authAccounts } from './accounts.js';
 import {
   questionCategory,
   questionnaireStatus,
+  questionnairePurpose,
   questionnaireVersionStatus,
   questionStatus,
   questionType,
@@ -47,6 +48,7 @@ export const questionnaires = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     name: text('name').notNull(),
+    purpose: questionnairePurpose('purpose').notNull().default('DRIVER_FEEDBACK'),
     status: questionnaireStatus('status').notNull().default('ACTIVE'),
     createdByAccountId: uuid('created_by_account_id')
       .notNull()
@@ -72,6 +74,7 @@ export const questionnaireVersions = pgTable(
     questionnaireId: uuid('questionnaire_id')
       .notNull()
       .references(() => questionnaires.id, { onDelete: 'restrict' }),
+    purpose: questionnairePurpose('purpose').notNull().default('DRIVER_FEEDBACK'),
     versionNumber: integer('version_number').notNull(),
     status: questionnaireVersionStatus('status').notNull().default('DRAFT'),
     publishedAt: timestamp('published_at', { withTimezone: true }),
@@ -84,8 +87,8 @@ export const questionnaireVersions = pgTable(
   },
   (table) => [
     unique('questionnaire_versions_number_unique').on(table.questionnaireId, table.versionNumber),
-    uniqueIndex('questionnaire_versions_global_active_unique')
-      .on(sql`((1))`)
+    uniqueIndex('questionnaire_versions_purpose_active_unique')
+      .on(table.purpose)
       .where(sql`${table.status} = 'ACTIVE'`),
     index('questionnaire_versions_questionnaire_status_idx').on(
       table.questionnaireId,

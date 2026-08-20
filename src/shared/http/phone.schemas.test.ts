@@ -31,7 +31,6 @@ describe('E.164 phone contract', () => {
   it('applies the contract to new passenger feedback submissions', () => {
     const submission = {
       clientSubmissionId: '00000000-0000-4000-8000-000000000001',
-      questionnaireVersionId: '00000000-0000-4000-8000-000000000002',
       questionnaireSnapshot: {},
       respondent: {
         name: 'Passenger',

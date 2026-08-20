@@ -8,6 +8,8 @@ export const bookings = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     bookingReference: text('booking_reference').notNull(),
+    tourName: text('tour_name'),
+    fileNumber: text('file_number'),
     passengerName: text('passenger_name').notNull(),
     passengerPhoneCiphertext: text('passenger_phone_ciphertext'),
     startsAt: timestamp('starts_at', { withTimezone: true }).notNull(),

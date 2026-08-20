@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, gte, lte, sql, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gte, inArray, lte, sql, type SQL } from 'drizzle-orm';
 import type { AppDatabase } from '../../database/client.js';
 import {
   auditEvents,
@@ -7,6 +7,7 @@ import {
   feedbackPhotos,
   feedbackReviewEvents,
   feedbackSubmissions,
+  feedbackSubmissionSections,
   trips,
 } from '../../database/schema/index.js';
 import { AppError } from '../../shared/errors/app-error.js';
@@ -17,6 +18,7 @@ import type { PhotoStorage } from '../../shared/storage/photo-storage.js';
 type DriverSource = 'AGENCY' | 'OUTSOURCED';
 type ReviewState = 'NORMAL' | 'FLAGGED' | 'ARCHIVED';
 type SubmissionMode = 'ONLINE' | 'OFFLINE_SYNC';
+export type FeedbackView = 'DRIVER' | 'COMPANY';
 type Category =
   | 'OVERALL_EXPERIENCE'
   | 'DRIVING_SAFETY'
@@ -24,11 +26,15 @@ type Category =
   | 'CLEANLINESS'
   | 'PROFESSIONALISM'
   | 'VEHICLE_CONDITION'
+  | 'ARRIVAL_EXPERIENCE'
+  | 'TOUR_EXPERIENCE'
+  | 'TOUR_COORDINATION'
   | 'CUSTOM';
 
 export interface ListAdminFeedbackInput {
   readonly page: number;
   readonly pageSize: number;
+  readonly view: FeedbackView;
   readonly month?: string;
   readonly driverId?: string;
   readonly driverSource?: DriverSource;
@@ -41,12 +47,6 @@ export interface ListAdminFeedbackInput {
   readonly negativeOnly?: boolean;
 }
 
-const correlatedOverallScore = sql<number | null>`(
-  select avg(answer.numeric_score)::double precision
-  from feedback_answers answer
-  where answer.feedback_submission_id = ${feedbackSubmissions.id}
-    and answer.numeric_score is not null
-)`;
 const aggregateOverallScore = sql<
   number | null
 >`avg(${feedbackAnswers.numericScore})::double precision`;
@@ -90,7 +90,13 @@ export class AdminFeedbackService {
           overallScore: aggregateOverallScore,
         })
         .from(feedbackSubmissions)
-        .leftJoin(feedbackAnswers, eq(feedbackAnswers.feedbackSubmissionId, feedbackSubmissions.id))
+        .leftJoin(
+          feedbackAnswers,
+          and(
+            eq(feedbackAnswers.feedbackSubmissionId, feedbackSubmissions.id),
+            answerPurposeCondition(input.view),
+          ),
+        )
         .where(filter)
         .groupBy(
           feedbackSubmissions.id,
@@ -115,7 +121,7 @@ export class AdminFeedbackService {
     return { items, total: total?.value ?? 0, timezone: settings.timezone };
   }
 
-  async get(id: string) {
+  async get(id: string, view?: FeedbackView) {
     const [row] = await this.db
       .select({
         submission: feedbackSubmissions,
@@ -133,12 +139,39 @@ export class AdminFeedbackService {
       .limit(1);
     if (!row) this.notFound();
 
-    const [answers, history, [photo]] = await Promise.all([
+    const [sections, answers, history, [photo]] = await Promise.all([
+      this.db
+        .select({
+          purpose: feedbackSubmissionSections.purpose,
+          questionnaireVersionId: feedbackSubmissionSections.questionnaireVersionId,
+          displayOrder: feedbackSubmissionSections.displayOrder,
+        })
+        .from(feedbackSubmissionSections)
+        .where(
+          and(
+            eq(feedbackSubmissionSections.feedbackSubmissionId, id),
+            view ? sectionPurposeCondition(view) : undefined,
+          ),
+        )
+        .orderBy(feedbackSubmissionSections.displayOrder),
       this.db
         .select()
         .from(feedbackAnswers)
-        .where(eq(feedbackAnswers.feedbackSubmissionId, id))
-        .orderBy(asc(feedbackAnswers.displayOrderSnapshot), asc(feedbackAnswers.id)),
+        .where(
+          and(
+            eq(feedbackAnswers.feedbackSubmissionId, id),
+            view ? answerPurposeCondition(view) : undefined,
+          ),
+        )
+        .orderBy(
+          sql`case ${feedbackAnswers.questionnairePurposeSnapshot}
+            when 'ARRIVAL_EXPERIENCE' then 0
+            when 'DRIVER_FEEDBACK' then 1
+            when 'TOUR_EXPERIENCE' then 2
+          end`,
+          asc(feedbackAnswers.displayOrderSnapshot),
+          asc(feedbackAnswers.id),
+        ),
       this.db
         .select({
           id: feedbackReviewEvents.id,
@@ -166,9 +199,12 @@ export class AdminFeedbackService {
         .limit(1),
     ]);
 
+    if (view && answers.length === 0) this.notFound();
+
     return {
       ...row,
       answers,
+      sections,
       history,
       photo: photo ?? null,
       overallScore: average(
@@ -301,6 +337,11 @@ function buildFilter(
   negativeThreshold: number | null,
 ): SQL | undefined {
   const conditions: SQL[] = [];
+  conditions.push(sql`exists (
+    select 1 from feedback_answers view_answer
+    where view_answer.feedback_submission_id = ${feedbackSubmissions.id}
+      and ${rawPurposeCondition(input.view, sql`view_answer.questionnaire_purpose_snapshot`)}
+  )`);
   if (input.month) conditions.push(monthCondition(input.month, timezone));
   if (input.driverId) conditions.push(eq(feedbackSubmissions.driverId, input.driverId));
   if (input.driverSource)
@@ -315,15 +356,46 @@ function buildFilter(
       select 1 from feedback_answers answer
       where answer.feedback_submission_id = ${feedbackSubmissions.id}
         and answer.category_snapshot = ${input.category}
+        and ${rawPurposeCondition(input.view, sql`answer.questionnaire_purpose_snapshot`)}
     )`);
   }
-  if (input.minimumScore !== undefined)
-    conditions.push(gte(correlatedOverallScore, input.minimumScore));
-  if (input.maximumScore !== undefined)
-    conditions.push(lte(correlatedOverallScore, input.maximumScore));
+  const viewOverallScore = correlatedOverallScore(input.view);
+  if (input.minimumScore !== undefined) conditions.push(gte(viewOverallScore, input.minimumScore));
+  if (input.maximumScore !== undefined) conditions.push(lte(viewOverallScore, input.maximumScore));
   if (input.negativeOnly && negativeThreshold !== null)
-    conditions.push(lte(correlatedOverallScore, negativeThreshold));
+    conditions.push(lte(viewOverallScore, negativeThreshold));
   return conditions.length ? and(...conditions) : undefined;
+}
+
+function answerPurposeCondition(view: FeedbackView): SQL {
+  return view === 'DRIVER'
+    ? eq(feedbackAnswers.questionnairePurposeSnapshot, 'DRIVER_FEEDBACK')
+    : inArray(feedbackAnswers.questionnairePurposeSnapshot, [
+        'ARRIVAL_EXPERIENCE',
+        'TOUR_EXPERIENCE',
+      ]);
+}
+
+function sectionPurposeCondition(view: FeedbackView): SQL {
+  return view === 'DRIVER'
+    ? eq(feedbackSubmissionSections.purpose, 'DRIVER_FEEDBACK')
+    : inArray(feedbackSubmissionSections.purpose, ['ARRIVAL_EXPERIENCE', 'TOUR_EXPERIENCE']);
+}
+
+function rawPurposeCondition(view: FeedbackView, column: SQL): SQL {
+  return view === 'DRIVER'
+    ? sql`${column} = 'DRIVER_FEEDBACK'`
+    : sql`${column} in ('ARRIVAL_EXPERIENCE', 'TOUR_EXPERIENCE')`;
+}
+
+function correlatedOverallScore(view: FeedbackView): SQL<number | null> {
+  return sql<number | null>`(
+    select avg(answer.numeric_score)::double precision
+    from feedback_answers answer
+    where answer.feedback_submission_id = ${feedbackSubmissions.id}
+      and answer.numeric_score is not null
+      and ${rawPurposeCondition(view, sql`answer.questionnaire_purpose_snapshot`)}
+  )`;
 }
 
 function average(values: readonly number[]): number | null {

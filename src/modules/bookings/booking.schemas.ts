@@ -14,6 +14,8 @@ export const bookingStatusSchema = Type.Union([
 
 const bookingFields = {
   bookingReference: Type.String({ minLength: 1, maxLength: 100 }),
+  tourName: Type.Union([Type.String({ maxLength: 200 }), Type.Null()]),
+  fileNumber: Type.Union([Type.String({ maxLength: 100 }), Type.Null()]),
   passengerName: Type.String({ minLength: 1, maxLength: 200 }),
   passengerPhone: e164PhoneSchema,
   startsAt: Type.String({ format: 'date-time' }),
@@ -24,6 +26,8 @@ const bookingFields = {
 export const createBookingBodySchema = Type.Object(
   {
     bookingReference: bookingFields.bookingReference,
+    tourName: Type.Optional(bookingFields.tourName),
+    fileNumber: Type.Optional(bookingFields.fileNumber),
     passengerName: bookingFields.passengerName,
     passengerPhone: bookingFields.passengerPhone,
     startsAt: bookingFields.startsAt,
@@ -36,6 +40,8 @@ export const createBookingBodySchema = Type.Object(
 export const updateBookingBodySchema = Type.Object(
   {
     bookingReference: Type.Optional(bookingFields.bookingReference),
+    tourName: Type.Optional(bookingFields.tourName),
+    fileNumber: Type.Optional(bookingFields.fileNumber),
     passengerName: Type.Optional(bookingFields.passengerName),
     passengerPhone: Type.Optional(bookingFields.passengerPhone),
     startsAt: Type.Optional(bookingFields.startsAt),
@@ -57,6 +63,8 @@ export const bookingListQuerySchema = Type.Object({
 export const bookingSchema = Type.Object({
   id: Type.String({ format: 'uuid' }),
   bookingReference: Type.String(),
+  tourName: Type.Union([Type.String(), Type.Null()]),
+  fileNumber: Type.Union([Type.String(), Type.Null()]),
   passengerName: Type.String(),
   passengerPhone: Type.Union([bookingFields.passengerPhone, Type.Null()]),
   startsAt: Type.String({ format: 'date-time' }),
@@ -71,7 +79,22 @@ export const bookingSchema = Type.Object({
 
 export const bookingResponseSchema = Type.Object({ data: bookingSchema });
 export const bookingDetailResponseSchema = Type.Object({
-  data: Type.Object({ ...bookingSchema.properties, trips: Type.Array(tripSchema) }),
+  data: Type.Object({
+    ...bookingSchema.properties,
+    trips: Type.Array(tripSchema),
+    feedbackWarnings: Type.Array(
+      Type.Object({
+        code: Type.Union([
+          Type.Literal('ARRIVAL_FEEDBACK_MISSING'),
+          Type.Literal('ARRIVAL_FEEDBACK_NOT_ON_FIRST_TRIP'),
+          Type.Literal('TOUR_FEEDBACK_MISSING'),
+          Type.Literal('TOUR_FEEDBACK_NOT_ON_LAST_TRIP'),
+        ]),
+        message: Type.String(),
+        tripId: Type.Union([Type.String({ format: 'uuid' }), Type.Null()]),
+      }),
+    ),
+  }),
 });
 export const bookingListResponseSchema = Type.Object({
   data: Type.Array(bookingSchema),

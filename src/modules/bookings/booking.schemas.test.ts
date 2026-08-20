@@ -28,3 +28,32 @@ describe('booking phone contract', () => {
     expect(Check(updateBookingBodySchema, { passengerPhone: null })).toBe(false);
   });
 });
+
+describe('booking tour details contract', () => {
+  it('allows tour name and file number to be omitted or supplied during creation', () => {
+    expect(Check(createBookingBodySchema, validBooking)).toBe(true);
+    expect(
+      Check(createBookingBodySchema, {
+        ...validBooking,
+        tourName: 'Rajasthan Heritage Tour',
+        fileNumber: 'FILE-2048',
+      }),
+    ).toBe(true);
+    expect(
+      Check(createBookingBodySchema, { ...validBooking, tourName: null, fileNumber: null }),
+    ).toBe(true);
+  });
+
+  it('allows tour name and file number to be changed or cleared during update', () => {
+    expect(Check(updateBookingBodySchema, { tourName: 'Golden Triangle' })).toBe(true);
+    expect(Check(updateBookingBodySchema, { fileNumber: 'FIT-1001' })).toBe(true);
+    expect(Check(updateBookingBodySchema, { tourName: null, fileNumber: null })).toBe(true);
+  });
+
+  it('enforces field length limits', () => {
+    expect(Check(createBookingBodySchema, { ...validBooking, tourName: 'T'.repeat(201) })).toBe(
+      false,
+    );
+    expect(Check(updateBookingBodySchema, { fileNumber: 'F'.repeat(101) })).toBe(false);
+  });
+});

@@ -6,17 +6,21 @@ import {
   bookings,
   driverLeavePeriods,
   drivers,
+  feedbackHandoffs,
+  tripFeedbackSections,
   trips,
   vehicles,
   vendors,
 } from '../../database/schema/index.js';
 import { AppError } from '../../shared/errors/app-error.js';
+import { findPostgresError } from '../../shared/database/postgres-error.js';
 
 type AppTransaction = Parameters<Parameters<AppDatabase['transaction']>[0]>[0];
 type QueryDatabase = Pick<AppDatabase, 'select'>;
 
 export type TripStatus = 'READY' | 'FEEDBACK_STARTED' | 'SUBMITTED' | 'ARCHIVED';
 export type TripCreationSource = 'ADMIN_ASSIGNED' | 'DRIVER_ENTERED';
+export type QuestionnairePurpose = 'ARRIVAL_EXPERIENCE' | 'DRIVER_FEEDBACK' | 'TOUR_EXPERIENCE';
 
 export interface CreateTripInput {
   readonly bookingId: string;
@@ -26,6 +30,7 @@ export interface CreateTripInput {
   readonly scheduledEndAt: string;
   readonly vehicleId: string;
   readonly driverId: string;
+  readonly feedbackPurposes?: readonly QuestionnairePurpose[];
 }
 
 export interface UpdateTripInput {
@@ -36,6 +41,7 @@ export interface UpdateTripInput {
   readonly scheduledEndAt?: string;
   readonly vehicleId?: string;
   readonly driverId?: string;
+  readonly feedbackPurposes?: readonly QuestionnairePurpose[];
 }
 
 export interface ListTripsInput {
@@ -65,6 +71,15 @@ const tripSelection = {
   vendorId: trips.vendorId,
   vendorNameSnapshot: trips.vendorNameSnapshot,
   creationSource: trips.creationSource,
+  feedbackPurposes: sql<QuestionnairePurpose[]>`coalesce((
+    select json_agg("trip_sections"."purpose" order by case "trip_sections"."purpose"
+      when 'ARRIVAL_EXPERIENCE' then 0
+      when 'DRIVER_FEEDBACK' then 1
+      when 'TOUR_EXPERIENCE' then 2
+    end)
+    from "trip_feedback_sections" as "trip_sections"
+    where "trip_sections"."trip_id" = "trips"."id"
+  ), '[]'::json)`,
   status: trips.status,
   startedFeedbackAt: trips.startedFeedbackAt,
   createdAt: trips.createdAt,
@@ -110,6 +125,7 @@ export class TripService {
       const [updated] = await this.db.transaction(async (tx) => {
         await this.acquireAssignmentLocks(tx, [
           `booking:${bookingId}`,
+          ...(bookingId !== current.bookingId ? [`booking:${current.bookingId}`] : []),
           `driver:${driverId}`,
           `vehicle:${vehicleId}`,
         ]);
@@ -153,6 +169,16 @@ export class TripService {
             message: 'Only a ready trip can be edited',
             statusCode: 409,
           });
+        }
+        if (input.feedbackPurposes !== undefined || bookingId !== current.bookingId) {
+          await this.replaceFeedbackSections(
+            tx,
+            id,
+            bookingId,
+            input.feedbackPurposes ?? current.feedbackPurposes,
+            actorAccountId,
+          );
+          await tx.delete(feedbackHandoffs).where(eq(feedbackHandoffs.tripId, id));
         }
         await tx.insert(auditEvents).values({
           actorAccountId,
@@ -236,6 +262,7 @@ export class TripService {
         entityType: 'TRIP',
         entityId: id,
       });
+      await tx.delete(tripFeedbackSections).where(eq(tripFeedbackSections.tripId, id));
       return (await this.findTrip(tx, eq(trips.id, id)))!;
     });
   }
@@ -281,6 +308,15 @@ export class TripService {
             createdByAccountId: actorAccountId,
           })
           .returning({ id: trips.id });
+        const feedbackPurposes =
+          input.feedbackPurposes ?? (await this.defaultFeedbackPurposes(tx, booking.id));
+        await this.replaceFeedbackSections(
+          tx,
+          created!.id,
+          booking.id,
+          feedbackPurposes,
+          actorAccountId,
+        );
         const trip = await this.findTrip(tx, eq(trips.id, created!.id));
         await tx.insert(auditEvents).values({
           actorAccountId,
@@ -525,6 +561,42 @@ export class TripService {
     }
   }
 
+  private async defaultFeedbackPurposes(
+    database: AppTransaction,
+    bookingId: string,
+  ): Promise<QuestionnairePurpose[]> {
+    const [arrival] = await database
+      .select({ tripId: tripFeedbackSections.tripId })
+      .from(tripFeedbackSections)
+      .where(
+        and(
+          eq(tripFeedbackSections.bookingId, bookingId),
+          eq(tripFeedbackSections.purpose, 'ARRIVAL_EXPERIENCE'),
+        ),
+      )
+      .limit(1);
+    return arrival ? ['DRIVER_FEEDBACK'] : ['ARRIVAL_EXPERIENCE', 'DRIVER_FEEDBACK'];
+  }
+
+  private async replaceFeedbackSections(
+    database: AppTransaction,
+    tripId: string,
+    bookingId: string,
+    purposes: readonly QuestionnairePurpose[],
+    actorAccountId: string,
+  ) {
+    await database.delete(tripFeedbackSections).where(eq(tripFeedbackSections.tripId, tripId));
+    if (!purposes.length) return;
+    await database.insert(tripFeedbackSections).values(
+      purposes.map((purpose) => ({
+        tripId,
+        bookingId,
+        purpose,
+        assignedByAccountId: actorAccountId,
+      })),
+    );
+  }
+
   private validateShift(
     driver: Awaited<ReturnType<TripService['resolveDriver']>>,
     schedule: { scheduledAt: Date; scheduledEndAt: Date },
@@ -552,6 +624,14 @@ export class TripService {
   }
 
   private mapAssignmentDatabaseError(error: unknown): unknown {
+    const postgresError = findPostgresError(error, '23505');
+    if (postgresError?.constraint === 'trip_feedback_sections_booking_boundary_unique') {
+      return new AppError({
+        code: 'BOOKING_FEEDBACK_PURPOSE_ALREADY_ASSIGNED',
+        message: 'Arrival and tour feedback can each be assigned to only one trip per booking',
+        statusCode: 409,
+      });
+    }
     return error;
   }
 }

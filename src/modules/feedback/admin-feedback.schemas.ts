@@ -2,6 +2,7 @@ import { Type } from 'typebox';
 import { driverSourceSchema } from '../drivers/driver.schemas.js';
 import {
   questionCategorySchema,
+  questionnairePurposeSchema,
   questionTypeSchema,
 } from '../questionnaires/questionnaire.schemas.js';
 
@@ -24,9 +25,12 @@ export const feedbackReviewActionSchema = Type.Union([
 
 export const monthSchema = Type.String({ pattern: '^\\d{4}-(0[1-9]|1[0-2])$' });
 
+export const feedbackViewSchema = Type.Union([Type.Literal('DRIVER'), Type.Literal('COMPANY')]);
+
 export const adminFeedbackListQuerySchema = Type.Object({
   page: Type.Optional(Type.Integer({ minimum: 1, default: 1 })),
   pageSize: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, default: 25 })),
+  view: Type.Optional(feedbackViewSchema),
   month: Type.Optional(monthSchema),
   driverId: Type.Optional(Type.String({ format: 'uuid' })),
   driverSource: Type.Optional(driverSourceSchema),
@@ -37,6 +41,10 @@ export const adminFeedbackListQuerySchema = Type.Object({
   minimumScore: Type.Optional(Type.Number({ minimum: 1, maximum: 5 })),
   maximumScore: Type.Optional(Type.Number({ minimum: 1, maximum: 5 })),
   negativeOnly: Type.Optional(Type.Boolean()),
+});
+
+export const adminFeedbackDetailQuerySchema = Type.Object({
+  view: Type.Optional(feedbackViewSchema),
 });
 
 export const adminFeedbackSummarySchema = Type.Object({
@@ -76,6 +84,7 @@ export const adminFeedbackAnswerSchema = Type.Object({
   prompt: Type.String(),
   questionType: questionTypeSchema,
   category: questionCategorySchema,
+  purpose: questionnairePurposeSchema,
   displayOrder: Type.Integer(),
   value: Type.Unknown(),
   numericScore: Type.Union([Type.Number(), Type.Null()]),
@@ -102,7 +111,13 @@ export const adminFeedbackDetailSchema = Type.Intersect([
     }),
     consentVersionId: Type.String({ format: 'uuid' }),
     consentedAt: Type.String({ format: 'date-time' }),
-    questionnaireVersionId: Type.String({ format: 'uuid' }),
+    questionnaireSections: Type.Array(
+      Type.Object({
+        purpose: questionnairePurposeSchema,
+        questionnaireVersionId: Type.String({ format: 'uuid' }),
+        displayOrder: Type.Integer(),
+      }),
+    ),
     photo: Type.Union([
       Type.Object({
         id: Type.String({ format: 'uuid' }),

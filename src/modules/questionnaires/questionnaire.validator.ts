@@ -12,6 +12,9 @@ export interface QuestionInput {
     | 'CLEANLINESS'
     | 'PROFESSIONALISM'
     | 'VEHICLE_CONDITION'
+    | 'ARRIVAL_EXPERIENCE'
+    | 'TOUR_EXPERIENCE'
+    | 'TOUR_COORDINATION'
     | 'CUSTOM';
   readonly status?: 'ACTIVE' | 'INACTIVE' | 'ARCHIVED';
   readonly isRequired: boolean;

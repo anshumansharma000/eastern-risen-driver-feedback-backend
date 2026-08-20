@@ -24,6 +24,11 @@ export interface QuestionnaireRouteOptions {
 const versionSummarySchema = Type.Object({
   id: Type.String({ format: 'uuid' }),
   questionnaireId: Type.String({ format: 'uuid' }),
+  purpose: Type.Union([
+    Type.Literal('ARRIVAL_EXPERIENCE'),
+    Type.Literal('DRIVER_FEEDBACK'),
+    Type.Literal('TOUR_EXPERIENCE'),
+  ]),
   versionNumber: Type.Integer(),
   status: Type.Union([
     Type.Literal('DRAFT'),
@@ -63,6 +68,7 @@ export const questionnaireRoutes: FastifyPluginAsyncTypebox<QuestionnaireRouteOp
     async (request, reply) => {
       const result = await options.questionnaireService.create(
         request.body.name,
+        request.body.purpose,
         request.auth!.accountId,
       );
       return reply.status(201).send({
@@ -314,6 +320,7 @@ export const consentRoutes: FastifyPluginAsyncTypebox<QuestionnaireRouteOptions>
 function serializeQuestionnaire(row: {
   id: string;
   name: string;
+  purpose: 'ARRIVAL_EXPERIENCE' | 'DRIVER_FEEDBACK' | 'TOUR_EXPERIENCE';
   status: 'ACTIVE' | 'ARCHIVED';
   createdAt: Date;
   updatedAt: Date;
@@ -330,6 +337,7 @@ function serializeQuestionnaire(row: {
 function serializeVersionSummary(row: {
   id: string;
   questionnaireId: string;
+  purpose: 'ARRIVAL_EXPERIENCE' | 'DRIVER_FEEDBACK' | 'TOUR_EXPERIENCE';
   versionNumber: number;
   status: 'DRAFT' | 'ACTIVE' | 'RETIRED' | 'ARCHIVED';
   publishedAt: Date | null;
@@ -350,6 +358,7 @@ function serializeVersion(row: Awaited<ReturnType<QuestionnaireService['getVersi
   return {
     ...serializeVersionSummary(row),
     questionnaireName: row.questionnaireName,
+    purpose: row.purpose,
     questions: row.questions.map((question) => ({
       id: question.id,
       stableKey: question.stableKey,

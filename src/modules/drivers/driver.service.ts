@@ -9,7 +9,7 @@ import {
   drivers,
   vendors,
 } from '../../database/schema/index.js';
-import { isPostgresError } from '../../shared/database/postgres-error.js';
+import { findPostgresError } from '../../shared/database/postgres-error.js';
 import { AppError } from '../../shared/errors/app-error.js';
 import type { AccountStatus } from '../auth/auth.types.js';
 import type { PasswordHasher } from '../auth/password.js';
@@ -164,8 +164,9 @@ export class DriverService {
       });
       return await this.get(driverId);
     } catch (error) {
-      if (isPostgresError(error, '23505')) {
-        const driverCodeConflict = error.constraint === 'drivers_code_unique';
+      const postgresError = findPostgresError(error, '23505');
+      if (postgresError) {
+        const driverCodeConflict = postgresError.constraint === 'drivers_code_unique';
         throw new AppError({
           code: driverCodeConflict ? 'DRIVER_CODE_ALREADY_EXISTS' : 'ACCOUNT_EMAIL_ALREADY_EXISTS',
           message: driverCodeConflict
@@ -288,8 +289,9 @@ export class DriverService {
         return driver!;
       });
     } catch (error) {
-      if (isPostgresError(error, '23505')) {
-        const driverCodeConflict = error.constraint === 'drivers_code_unique';
+      const postgresError = findPostgresError(error, '23505');
+      if (postgresError) {
+        const driverCodeConflict = postgresError.constraint === 'drivers_code_unique';
         throw new AppError({
           code: driverCodeConflict ? 'DRIVER_CODE_ALREADY_EXISTS' : 'ACCOUNT_EMAIL_ALREADY_EXISTS',
           message: driverCodeConflict

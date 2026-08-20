@@ -1,5 +1,10 @@
 import { AppError } from '../../shared/errors/app-error.js';
 import type { FeedbackQuestion } from './questionnaire-snapshot.js';
+import type { QuestionnairePurpose } from './questionnaire-snapshot.js';
+
+type ScopedFeedbackQuestion = FeedbackQuestion & {
+  readonly questionnairePurpose?: QuestionnairePurpose;
+};
 
 export interface FeedbackAnswerInput {
   readonly questionId: string;
@@ -7,7 +12,7 @@ export interface FeedbackAnswerInput {
 }
 
 export function validateFeedbackAnswers(
-  questions: readonly FeedbackQuestion[],
+  questions: readonly ScopedFeedbackQuestion[],
   inputs: readonly FeedbackAnswerInput[],
 ) {
   const activeQuestions = questions.filter((question) => question.status === 'ACTIVE');
@@ -27,6 +32,7 @@ export function validateFeedbackAnswers(
       questionPromptSnapshot: question.prompt,
       questionTypeSnapshot: question.questionType,
       categorySnapshot: question.category,
+      questionnairePurposeSnapshot: question.questionnairePurpose ?? 'DRIVER_FEEDBACK',
       displayOrderSnapshot: question.displayOrder,
       answerPayload: normalized.payload,
       numericScore: normalized.score,

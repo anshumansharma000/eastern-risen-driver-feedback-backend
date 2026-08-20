@@ -82,6 +82,7 @@ export const bookingRoutes: FastifyPluginAsyncTypebox<{
           ...presentBooking(booking),
           tripCount: trips.length,
           trips: trips.map(presentTrip),
+          feedbackWarnings: feedbackConfigurationWarnings(trips),
         },
       };
     },
@@ -124,3 +125,49 @@ export const bookingRoutes: FastifyPluginAsyncTypebox<{
     }),
   );
 };
+
+function feedbackConfigurationWarnings(trips: Awaited<ReturnType<TripService['listForBooking']>>) {
+  const activeTrips = trips.filter((trip) => trip.status !== 'ARCHIVED');
+  const firstTrip = activeTrips[0];
+  const lastTrip = activeTrips.at(-1);
+  const arrivalTrip = activeTrips.find((trip) =>
+    trip.feedbackPurposes.includes('ARRIVAL_EXPERIENCE'),
+  );
+  const tourTrip = activeTrips.find((trip) => trip.feedbackPurposes.includes('TOUR_EXPERIENCE'));
+  const warnings: Array<{
+    code:
+      | 'ARRIVAL_FEEDBACK_MISSING'
+      | 'ARRIVAL_FEEDBACK_NOT_ON_FIRST_TRIP'
+      | 'TOUR_FEEDBACK_MISSING'
+      | 'TOUR_FEEDBACK_NOT_ON_LAST_TRIP';
+    message: string;
+    tripId: string | null;
+  }> = [];
+  if (!arrivalTrip) {
+    warnings.push({
+      code: 'ARRIVAL_FEEDBACK_MISSING',
+      message: 'Assign arrival and booking feedback to the first pickup trip',
+      tripId: null,
+    });
+  } else if (firstTrip && arrivalTrip.id !== firstTrip.id) {
+    warnings.push({
+      code: 'ARRIVAL_FEEDBACK_NOT_ON_FIRST_TRIP',
+      message: 'Arrival and booking feedback is not assigned to the earliest scheduled trip',
+      tripId: arrivalTrip.id,
+    });
+  }
+  if (!tourTrip) {
+    warnings.push({
+      code: 'TOUR_FEEDBACK_MISSING',
+      message: 'Assign tour coordination and experience feedback to the final trip',
+      tripId: null,
+    });
+  } else if (lastTrip && tourTrip.id !== lastTrip.id) {
+    warnings.push({
+      code: 'TOUR_FEEDBACK_NOT_ON_LAST_TRIP',
+      message: 'Tour coordination and experience feedback is not assigned to the last trip',
+      tripId: tourTrip.id,
+    });
+  }
+  return warnings;
+}

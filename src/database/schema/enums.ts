@@ -20,6 +20,11 @@ export const bookingStatus = pgEnum('booking_status', [
   'ARCHIVED',
 ]);
 export const questionnaireStatus = pgEnum('questionnaire_status', ['ACTIVE', 'ARCHIVED']);
+export const questionnairePurpose = pgEnum('questionnaire_purpose', [
+  'ARRIVAL_EXPERIENCE',
+  'DRIVER_FEEDBACK',
+  'TOUR_EXPERIENCE',
+]);
 export const questionnaireVersionStatus = pgEnum('questionnaire_version_status', [
   'DRAFT',
   'ACTIVE',
@@ -42,6 +47,9 @@ export const questionCategory = pgEnum('question_category', [
   'CLEANLINESS',
   'PROFESSIONALISM',
   'VEHICLE_CONDITION',
+  'ARRIVAL_EXPERIENCE',
+  'TOUR_EXPERIENCE',
+  'TOUR_COORDINATION',
   'CUSTOM',
 ]);
 export const feedbackSubmissionMode = pgEnum('feedback_submission_mode', [

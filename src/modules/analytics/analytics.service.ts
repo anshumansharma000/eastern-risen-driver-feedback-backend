@@ -12,6 +12,9 @@ type Category =
   | 'CLEANLINESS'
   | 'PROFESSIONALISM'
   | 'VEHICLE_CONDITION'
+  | 'ARRIVAL_EXPERIENCE'
+  | 'TOUR_EXPERIENCE'
+  | 'TOUR_COORDINATION'
   | 'CUSTOM';
 
 export interface AnalyticsFilters {
@@ -250,6 +253,7 @@ function buildScoreFilter(filters: AnalyticsFilters, timezone: string): SQL | un
   const conditions: SQL[] = [
     ne(feedbackSubmissions.currentReviewState, 'ARCHIVED'),
     isNotNull(feedbackAnswers.numericScore),
+    eq(feedbackAnswers.questionnairePurposeSnapshot, 'DRIVER_FEEDBACK'),
   ];
   if (filters.month) conditions.push(monthCondition(filters.month, timezone));
   if (filters.driverId) conditions.push(eq(feedbackSubmissions.driverId, filters.driverId));

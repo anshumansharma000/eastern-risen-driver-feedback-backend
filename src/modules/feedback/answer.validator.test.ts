@@ -39,9 +39,25 @@ describe('feedback answer validation', () => {
       { questionId: 'question-2', value: '  Great trip  ' },
     ]);
     expect(answers).toMatchObject([
-      { numericScore: 5, answerPayload: { value: 5 } },
-      { numericScore: null, answerPayload: { value: 'Great trip' } },
+      {
+        numericScore: 5,
+        answerPayload: { value: 5 },
+        questionnairePurposeSnapshot: 'DRIVER_FEEDBACK',
+      },
+      {
+        numericScore: null,
+        answerPayload: { value: 'Great trip' },
+        questionnairePurposeSnapshot: 'DRIVER_FEEDBACK',
+      },
     ]);
+  });
+
+  it('preserves the questionnaire purpose for reporting', () => {
+    const [answer] = validateFeedbackAnswers(
+      [{ ...question({}), questionnairePurpose: 'TOUR_EXPERIENCE' }],
+      [{ questionId: 'question-1', value: 4 }],
+    );
+    expect(answer?.questionnairePurposeSnapshot).toBe('TOUR_EXPERIENCE');
   });
 
   it('normalizes yes/no and multiple-choice scores', () => {

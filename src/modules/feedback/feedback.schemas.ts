@@ -3,6 +3,7 @@ import { e164PhoneSchema } from '../../shared/http/phone.schemas.js';
 import {
   consentSchema,
   questionCategorySchema,
+  questionnairePurposeSchema,
   questionTypeSchema,
 } from '../questionnaires/questionnaire.schemas.js';
 import { tripSchema } from '../trips/trip.schemas.js';
@@ -39,10 +40,17 @@ export const passengerContextSchema = Type.Object({
     driver: Type.Object({ displayName: Type.String() }),
   }),
   questionnaire: Type.Object({
-    questionnaireId: Type.String({ format: 'uuid' }),
-    questionnaireVersionId: Type.String({ format: 'uuid' }),
-    versionNumber: Type.Integer(),
-    questions: Type.Array(passengerQuestionSchema),
+    schemaVersion: Type.Literal(2),
+    sections: Type.Array(
+      Type.Object({
+        purpose: questionnairePurposeSchema,
+        title: Type.String(),
+        questionnaireId: Type.String({ format: 'uuid' }),
+        questionnaireVersionId: Type.String({ format: 'uuid' }),
+        versionNumber: Type.Integer(),
+        questions: Type.Array(passengerQuestionSchema),
+      }),
+    ),
   }),
   consent: consentSchema,
   completion: Type.Object({
@@ -133,7 +141,6 @@ const answerValueSchema = Type.Unknown();
 export const submitFeedbackBodySchema = Type.Object(
   {
     clientSubmissionId: Type.String({ format: 'uuid' }),
-    questionnaireVersionId: Type.String({ format: 'uuid' }),
     questionnaireSnapshot: Type.Unknown(),
     respondent: Type.Object(
       {

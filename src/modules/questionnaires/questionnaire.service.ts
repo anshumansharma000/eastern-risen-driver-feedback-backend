@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, inArray, isNull, max, ne } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, isNull, max, ne, sql } from 'drizzle-orm';
 import type { AppDatabase } from '../../database/client.js';
 import {
   auditEvents,
@@ -16,15 +16,33 @@ export interface PaginationInput {
   readonly pageSize: number;
 }
 
+export type QuestionnairePurpose = 'ARRIVAL_EXPERIENCE' | 'DRIVER_FEEDBACK' | 'TOUR_EXPERIENCE';
+
 export class QuestionnaireService {
   constructor(private readonly db: AppDatabase) {}
 
-  async create(name: string, actorAccountId: string) {
+  async create(name: string, purpose: QuestionnairePurpose, actorAccountId: string) {
     return this.db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtextextended(${'questionnaire:' + purpose}, 0))`,
+      );
+      const [existing] = await tx
+        .select({ id: questionnaires.id })
+        .from(questionnaires)
+        .where(and(eq(questionnaires.purpose, purpose), eq(questionnaires.status, 'ACTIVE')))
+        .limit(1);
+      if (existing) {
+        throw new AppError({
+          code: 'QUESTIONNAIRE_PURPOSE_ALREADY_EXISTS',
+          message: 'An active questionnaire already exists for this purpose',
+          statusCode: 409,
+        });
+      }
       const [questionnaire] = await tx
         .insert(questionnaires)
         .values({
           name: name.trim(),
+          purpose,
           createdByAccountId: actorAccountId,
         })
         .returning();
@@ -32,6 +50,7 @@ export class QuestionnaireService {
         .insert(questionnaireVersions)
         .values({
           questionnaireId: questionnaire!.id,
+          purpose,
           versionNumber: 1,
           createdByAccountId: actorAccountId,
         })
@@ -170,6 +189,7 @@ export class QuestionnaireService {
         id: questionnaireVersions.id,
         questionnaireId: questionnaireVersions.questionnaireId,
         questionnaireName: questionnaires.name,
+        purpose: questionnaireVersions.purpose,
         versionNumber: questionnaireVersions.versionNumber,
         status: questionnaireVersions.status,
         publishedAt: questionnaireVersions.publishedAt,
@@ -256,14 +276,29 @@ export class QuestionnaireService {
     );
     const now = new Date();
     await this.db.transaction(async (tx) => {
+      const [questionnaire] = await tx
+        .select({ purpose: questionnaires.purpose })
+        .from(questionnaires)
+        .where(eq(questionnaires.id, questionnaireId))
+        .limit(1);
+      if (!questionnaire) this.versionNotFound();
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtextextended(${'questionnaire:' + questionnaire.purpose}, 0))`,
+      );
       await tx
         .update(questionnaireVersions)
         .set({ status: 'RETIRED', retiredAt: now, updatedAt: now })
-        .where(eq(questionnaireVersions.status, 'ACTIVE'));
+        .where(
+          and(
+            eq(questionnaireVersions.purpose, questionnaire.purpose),
+            eq(questionnaireVersions.status, 'ACTIVE'),
+          ),
+        );
       const [published] = await tx
         .update(questionnaireVersions)
         .set({
           status: 'ACTIVE',
+          purpose: questionnaire.purpose,
           publishedAt: now,
           retiredAt: null,
           updatedAt: now,
@@ -290,7 +325,7 @@ export class QuestionnaireService {
   }
 
   async createDraft(questionnaireId: string, actorAccountId: string) {
-    await this.assertQuestionnaire(questionnaireId);
+    const questionnaire = await this.assertQuestionnaire(questionnaireId);
     const [existingDraft] = await this.db
       .select({ id: questionnaireVersions.id })
       .from(questionnaireVersions)
@@ -319,6 +354,7 @@ export class QuestionnaireService {
         .insert(questionnaireVersions)
         .values({
           questionnaireId,
+          purpose: questionnaire.purpose,
           versionNumber: (latest?.versionNumber ?? 0) + 1,
           createdByAccountId: actorAccountId,
         })
@@ -407,19 +443,21 @@ export class QuestionnaireService {
     return consent;
   }
 
-  async getActiveVersion() {
+  async getActiveVersion(purpose: QuestionnairePurpose = 'DRIVER_FEEDBACK') {
     const [version] = await this.db
       .select({
         id: questionnaireVersions.id,
         questionnaireId: questionnaireVersions.questionnaireId,
       })
       .from(questionnaireVersions)
-      .where(eq(questionnaireVersions.status, 'ACTIVE'))
+      .where(
+        and(eq(questionnaireVersions.purpose, purpose), eq(questionnaireVersions.status, 'ACTIVE')),
+      )
       .limit(1);
     if (!version)
       throw new AppError({
         code: 'ACTIVE_QUESTIONNAIRE_NOT_FOUND',
-        message: 'No active questionnaire is configured',
+        message: `No active ${purpose.toLowerCase().replaceAll('_', ' ')} questionnaire is configured`,
         statusCode: 409,
       });
     return this.getVersion(version.questionnaireId, version.id);
@@ -493,7 +531,7 @@ export class QuestionnaireService {
 
   private async assertQuestionnaire(id: string) {
     const [row] = await this.db
-      .select({ id: questionnaires.id })
+      .select({ id: questionnaires.id, purpose: questionnaires.purpose })
       .from(questionnaires)
       .where(eq(questionnaires.id, id))
       .limit(1);
@@ -503,6 +541,7 @@ export class QuestionnaireService {
         message: 'Questionnaire was not found',
         statusCode: 404,
       });
+    return row;
   }
 
   private versionNotFound(): never {

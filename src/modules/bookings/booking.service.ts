@@ -1,7 +1,7 @@
-import { and, count, desc, eq, ne, sql, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, ne, sql, type SQL } from 'drizzle-orm';
 import type { AppDatabase } from '../../database/client.js';
-import { auditEvents, bookings, trips } from '../../database/schema/index.js';
-import { isPostgresError } from '../../shared/database/postgres-error.js';
+import { auditEvents, bookings, tripFeedbackSections, trips } from '../../database/schema/index.js';
+import { findPostgresError } from '../../shared/database/postgres-error.js';
 import { AppError } from '../../shared/errors/app-error.js';
 import type { FieldEncryptor } from '../../shared/security/field-encryption.js';
 
@@ -9,6 +9,8 @@ export type BookingStatus = 'ACTIVE' | 'COMPLETED' | 'CANCELLED' | 'ARCHIVED';
 
 export interface CreateBookingInput {
   readonly bookingReference: string;
+  readonly tourName?: string | null;
+  readonly fileNumber?: string | null;
   readonly passengerName: string;
   readonly passengerPhone: string;
   readonly startsAt: string;
@@ -18,6 +20,8 @@ export interface CreateBookingInput {
 
 export interface UpdateBookingInput {
   readonly bookingReference?: string;
+  readonly tourName?: string | null;
+  readonly fileNumber?: string | null;
   readonly passengerName?: string;
   readonly passengerPhone?: string;
   readonly startsAt?: string;
@@ -29,6 +33,8 @@ export interface UpdateBookingInput {
 const bookingSelection = {
   id: bookings.id,
   bookingReference: bookings.bookingReference,
+  tourName: bookings.tourName,
+  fileNumber: bookings.fileNumber,
   passengerName: bookings.passengerName,
   passengerPhoneCiphertext: bookings.passengerPhoneCiphertext,
   startsAt: bookings.startsAt,
@@ -61,6 +67,8 @@ export class BookingService {
         .insert(bookings)
         .values({
           bookingReference: input.bookingReference.trim(),
+          tourName: normalizeOptionalText(input.tourName),
+          fileNumber: normalizeOptionalText(input.fileNumber),
           passengerName: input.passengerName.trim(),
           passengerPhoneCiphertext: this.encryptor.encrypt(input.passengerPhone),
           startsAt: period.startsAt,
@@ -106,12 +114,19 @@ export class BookingService {
         statusCode: 409,
       });
     }
+    if (input.status === 'COMPLETED') await this.validateTourFeedbackConfiguration(id);
     try {
       const [updated] = await this.db
         .update(bookings)
         .set({
           ...(input.bookingReference !== undefined
             ? { bookingReference: input.bookingReference.trim() }
+            : {}),
+          ...(input.tourName !== undefined
+            ? { tourName: normalizeOptionalText(input.tourName) }
+            : {}),
+          ...(input.fileNumber !== undefined
+            ? { fileNumber: normalizeOptionalText(input.fileNumber) }
             : {}),
           ...(input.passengerName !== undefined
             ? { passengerName: input.passengerName.trim() }
@@ -208,6 +223,44 @@ export class BookingService {
         : null,
     };
   }
+
+  private async validateTourFeedbackConfiguration(bookingId: string) {
+    const [bookingTrips, [tourSection]] = await Promise.all([
+      this.db
+        .select({ id: trips.id })
+        .from(trips)
+        .where(and(eq(trips.bookingId, bookingId), ne(trips.status, 'ARCHIVED')))
+        .orderBy(asc(trips.scheduledAt), asc(trips.createdAt), asc(trips.id)),
+      this.db
+        .select({ tripId: tripFeedbackSections.tripId })
+        .from(tripFeedbackSections)
+        .where(
+          and(
+            eq(tripFeedbackSections.bookingId, bookingId),
+            eq(tripFeedbackSections.purpose, 'TOUR_EXPERIENCE'),
+          ),
+        )
+        .limit(1),
+    ]);
+    if (!bookingTrips.length || !tourSection) {
+      throw new AppError({
+        code: 'BOOKING_TOUR_FEEDBACK_MISSING',
+        message: 'Tour experience feedback must be assigned before completing the booking',
+        statusCode: 409,
+      });
+    }
+    if (tourSection.tripId !== bookingTrips.at(-1)!.id) {
+      throw new AppError({
+        code: 'BOOKING_TOUR_FEEDBACK_NOT_ON_LAST_TRIP',
+        message: 'Tour experience feedback must be assigned to the last scheduled trip',
+        statusCode: 409,
+      });
+    }
+  }
+}
+
+function normalizeOptionalText(value: string | null | undefined) {
+  return value?.trim() || null;
 }
 
 function validatePeriod(startsAtInput: string, endsAtInput: string) {
@@ -232,7 +285,7 @@ function notEditable(): never {
 }
 
 function mapBookingError(error: unknown): unknown {
-  if (isPostgresError(error, '23505') && error.constraint === 'bookings_reference_unique') {
+  if (findPostgresError(error, '23505')?.constraint === 'bookings_reference_unique') {
     return new AppError({
       code: 'BOOKING_REFERENCE_ALREADY_EXISTS',
       message: 'This booking reference is already in use',
