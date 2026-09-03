@@ -22,12 +22,12 @@ export interface CreateDriverInput {
   readonly phone?: string;
   readonly sourceType: 'AGENCY' | 'OUTSOURCED';
   readonly vendorId?: string | null;
-  readonly assignmentEnabled?: boolean;
+  readonly assignmentEnabled?: boolean | null;
   readonly shiftStartTime?: string | null;
   readonly shiftEndTime?: string | null;
-  readonly timeZone?: string;
-  readonly maxDailyDutyMinutes?: number;
-  readonly license?: DriverLicenseInput;
+  readonly timeZone?: string | null;
+  readonly maxDailyDutyMinutes?: number | null;
+  readonly license?: DriverLicenseInput | null;
 }
 
 export interface ListDriversInput {
@@ -109,7 +109,7 @@ export class DriverService {
 
   async create(input: CreateDriverInput, actorAccountId: string) {
     await this.resolveVendorName(input.sourceType, input.vendorId);
-    validateScheduleSettings(input.shiftStartTime, input.shiftEndTime, input.timeZone);
+    validateScheduleSettings(input.shiftStartTime, input.shiftEndTime, input.timeZone ?? undefined);
     validateLicense(input.license);
 
     const passwordHash = await this.passwords.hash(input.password);
@@ -588,7 +588,7 @@ function validateScheduleSettings(
   }
 }
 
-function validateLicense(license: DriverLicenseInput | undefined) {
+function validateLicense(license: DriverLicenseInput | null | undefined) {
   if (!license?.issuedOn || !license.expiresOn) return;
   if (license.expiresOn <= license.issuedOn) {
     throw new AppError({

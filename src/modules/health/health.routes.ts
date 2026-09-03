@@ -35,7 +35,7 @@ export const healthRoutes: FastifyPluginAsyncTypebox<HealthRouteOptions> = async
         },
       },
     },
-    async (_request, reply) => {
+    async (request, reply) => {
       try {
         await options.databaseHealthCheck?.();
         return {
@@ -43,7 +43,11 @@ export const healthRoutes: FastifyPluginAsyncTypebox<HealthRouteOptions> = async
           service: 'driver-feedback-api',
           timestamp: new Date().toISOString(),
         } as const;
-      } catch {
+      } catch (error) {
+        request.log.error(
+          { err: error, errorCode: 'DATABASE_UNAVAILABLE', statusCode: 503 },
+          'Database readiness check failed',
+        );
         return reply.status(503).send({
           status: 'unavailable',
           service: 'driver-feedback-api',

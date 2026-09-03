@@ -178,8 +178,10 @@ Not all listed admin modules have backend endpoints yet. Gate unfinished modules
 - Successful single-resource responses are `{ data: ... }`.
 - Collections are `{ data: [...], pagination: { page, pageSize, total } }`.
 - `204` responses have no body.
-- Errors are `{ error: { code, message, details?, requestId } }`; every response also includes `x-request-id`.
+- Errors are `{ error: { code, message, developerMessage, details?, requestId } }`; every response also includes `x-request-id`.
 - Translate known error codes into actionable UI copy. Keep the request ID in an expandable technical-details area or support message, never as the main error.
+- Treat `message` as safe user-facing fallback copy. Keep `developerMessage` in development tooling, diagnostics, or an expandable technical-details area; never use it as the primary end-user message.
+- Validation details are `{ fields: [{ field, message, rule }] }`; map them through the typed API client rather than depending on raw validator fields.
 - Normalize errors in one typed API client layer. Avoid page-specific parsing of raw backend responses.
 - Treat all timestamps as ISO timestamps from the server and display them in `Asia/Kolkata` unless later settings specify otherwise.
 - Use the live OpenAPI document at `/docs` or its JSON endpoint as the final contract source. Verify exact operations before wiring a screen.

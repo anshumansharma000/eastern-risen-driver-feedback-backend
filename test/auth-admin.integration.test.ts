@@ -120,6 +120,40 @@ integration('authentication and admin APIs', () => {
         driverCode,
         sourceType: 'OUTSOURCED',
         vendorId,
+        assignmentEnabled: null,
+        timeZone: null,
+        maxDailyDutyMinutes: null,
+        license: null,
+      },
+    });
+    expect(driverResponse.statusCode, driverResponse.body).toBe(201);
+    const driver = driverResponse.json<{
+      data: {
+        id: string;
+        accountId: string;
+        vendorName: string | null;
+        assignmentEnabled: boolean;
+        timeZone: string;
+        maxDailyDutyMinutes: number;
+        license: { licenseNumber: string; categories: string[] } | null;
+      };
+    }>().data;
+    expect(driver.vendorName).toBe(`Integration Vendor ${suffix}`);
+    expect(driver).toMatchObject({
+      assignmentEnabled: true,
+      timeZone: 'Asia/Kolkata',
+      maxDailyDutyMinutes: 720,
+      license: null,
+    });
+    driverId = driver.id;
+    driverAccountId = driver.accountId;
+
+    const driverUpdate = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/admin/drivers/${driverId}`,
+      headers: { cookie: cookie! },
+      payload: {
+        phone: '+919999999999',
         license: {
           licenseNumber: `LIC-${suffix}`,
           issuedOn: '2025-01-01',
@@ -129,28 +163,13 @@ integration('authentication and admin APIs', () => {
         },
       },
     });
-    expect(driverResponse.statusCode, driverResponse.body).toBe(201);
-    const driver = driverResponse.json<{
-      data: {
-        id: string;
-        accountId: string;
-        vendorName: string | null;
-        license: { licenseNumber: string; categories: string[] };
-      };
-    }>().data;
-    expect(driver.vendorName).toBe(`Integration Vendor ${suffix}`);
-    expect(driver.license).toMatchObject({ licenseNumber: `LIC-${suffix}`, categories: ['LMV'] });
-    driverId = driver.id;
-    driverAccountId = driver.accountId;
-
-    const driverUpdate = await app.inject({
-      method: 'PATCH',
-      url: `/api/v1/admin/drivers/${driverId}`,
-      headers: { cookie: cookie! },
-      payload: { phone: '+919999999999' },
-    });
     expect(driverUpdate.statusCode).toBe(200);
-    expect(driverUpdate.json()).toMatchObject({ data: { phone: '+919999999999' } });
+    expect(driverUpdate.json()).toMatchObject({
+      data: {
+        phone: '+919999999999',
+        license: { licenseNumber: `LIC-${suffix}`, categories: ['LMV'] },
+      },
+    });
 
     const deactivate = await app.inject({
       method: 'PATCH',

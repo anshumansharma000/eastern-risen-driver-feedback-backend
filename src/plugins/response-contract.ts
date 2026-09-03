@@ -14,6 +14,7 @@ const standardErrorResponses = {
   422: errorSchemaReference,
   429: errorSchemaReference,
   500: errorSchemaReference,
+  503: errorSchemaReference,
 } as const;
 
 const responseContractPlugin: FastifyPluginAsync = async (app) => {

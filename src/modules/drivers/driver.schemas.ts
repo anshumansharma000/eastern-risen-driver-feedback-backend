@@ -64,12 +64,16 @@ export const createDriverBodySchema = Type.Object(
     phone: Type.Optional(e164PhoneSchema),
     sourceType: driverSourceSchema,
     vendorId: Type.Optional(Type.Union([Type.String({ format: 'uuid' }), Type.Null()])),
-    assignmentEnabled: Type.Optional(Type.Boolean()),
+    assignmentEnabled: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
     shiftStartTime: Type.Optional(Type.Union([shiftTimeSchema, Type.Null()])),
     shiftEndTime: Type.Optional(Type.Union([shiftTimeSchema, Type.Null()])),
-    timeZone: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })),
-    maxDailyDutyMinutes: Type.Optional(Type.Integer({ minimum: 1, maximum: 1440 })),
-    license: Type.Optional(driverLicenseInputSchema),
+    timeZone: Type.Optional(
+      Type.Union([Type.String({ minLength: 1, maxLength: 100 }), Type.Null()]),
+    ),
+    maxDailyDutyMinutes: Type.Optional(
+      Type.Union([Type.Integer({ minimum: 1, maximum: 1440 }), Type.Null()]),
+    ),
+    license: Type.Optional(Type.Union([driverLicenseInputSchema, Type.Null()])),
   },
   { additionalProperties: false },
 );

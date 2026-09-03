@@ -5,6 +5,7 @@ export const errorResponseSchema = Type.Object(
     error: Type.Object({
       code: Type.String(),
       message: Type.String(),
+      developerMessage: Type.String(),
       details: Type.Optional(Type.Unknown()),
       requestId: Type.String(),
     }),

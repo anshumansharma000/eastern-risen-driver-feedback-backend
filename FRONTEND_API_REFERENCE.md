@@ -105,13 +105,31 @@ interface ApiErrorResponse {
   error: {
     code: string;
     message: string;
+    developerMessage: string;
     details?: unknown;
     requestId: string;
   };
 }
 ```
 
-Every response includes the same correlation identifier in the `x-request-id` header. Show friendly, code-specific UI copy. Preserve `requestId` in technical details or support messaging.
+`message` is safe, user-facing fallback copy. `developerMessage` is safe technical
+guidance for development, diagnostics, and support; do not display it as the primary
+message to end users. Every response includes the same correlation identifier in the
+`x-request-id` header. Show friendly, code-specific UI copy and preserve `requestId`
+with `developerMessage` in an expandable technical-details area or support message.
+
+Validation failures use a stable field-error structure instead of exposing the
+underlying schema validator:
+
+```ts
+interface ValidationErrorDetails {
+  fields: Array<{
+    field: string; // e.g. "body.email", "query.page", "params.id"
+    message: string;
+    rule: string;
+  }>;
+}
+```
 
 ### Time and identifiers
 
@@ -1204,6 +1222,7 @@ aggregate. `negativeFeedbackCount` is `null` when no threshold is configured.
 | `415` | `UNSUPPORTED_MEDIA_TYPE` | Client defect; verify JSON header/body |
 | `429` | `RATE_LIMIT_EXCEEDED` | Temporarily disable/retry with backoff; retain safe form state |
 | `500` | `INTERNAL_SERVER_ERROR` | Recoverable page error; show request ID and controlled retry |
+| `503` | `PHOTO_STORAGE_UNAVAILABLE` | Dependency/configuration failure; disable the affected action and allow a controlled retry |
 
 ### Domain error codes
 

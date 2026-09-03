@@ -655,6 +655,7 @@ export class FeedbackService {
       throw new AppError({
         code: 'PHOTO_STORAGE_UNAVAILABLE',
         message: 'Photo uploads are temporarily unavailable',
+        developerMessage: 'Photo storage is disabled because the R2 configuration is incomplete.',
         statusCode: 503,
       });
     }

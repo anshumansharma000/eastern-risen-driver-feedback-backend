@@ -222,6 +222,7 @@ export class AdminFeedbackService {
       throw new AppError({
         code: 'PHOTO_STORAGE_UNAVAILABLE',
         message: 'Photo storage is temporarily unavailable',
+        developerMessage: 'Photo storage is disabled because the R2 configuration is incomplete.',
         statusCode: 503,
       });
     }
