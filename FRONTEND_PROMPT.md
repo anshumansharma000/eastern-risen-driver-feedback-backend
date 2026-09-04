@@ -249,3 +249,7 @@ The work is complete only when:
 - `FRONTEND_REFERENCE.md` accurately reflects the shipped implementation.
 
 Before making material assumptions, check the source documents. If a decision remains genuinely open, choose the safest reversible default, label it provisional, and record it in the decision log.
+# Engagement migration notice
+
+For all booking feedback, driver feedback, and link-sharing screens, apply
+`FRONTEND_ENGAGEMENTS_PROMPT.md`; it supersedes the trip-scoped feedback portions of this prompt.

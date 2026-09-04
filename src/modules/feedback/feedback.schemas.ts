@@ -6,7 +6,7 @@ import {
   questionnairePurposeSchema,
   questionTypeSchema,
 } from '../questionnaires/questionnaire.schemas.js';
-import { tripSchema } from '../trips/trip.schemas.js';
+import { engagementSchema } from '../engagements/engagement.schemas.js';
 
 const passengerOptionSchema = Type.Object({
   valueKey: Type.String(),
@@ -30,14 +30,22 @@ const passengerQuestionSchema = Type.Object({
 });
 
 export const passengerContextSchema = Type.Object({
-  trip: Type.Object({
+  engagement: Type.Object({
     id: Type.String({ format: 'uuid' }),
+    sequenceNumber: Type.Integer({ minimum: 1 }),
     bookingReference: Type.String(),
-    pickupLocation: Type.String(),
-    destination: Type.String(),
-    scheduledAt: Type.String({ format: 'date-time' }),
-    vehicle: Type.Object({ registrationNumber: Type.String(), displayName: Type.String() }),
     driver: Type.Object({ displayName: Type.String() }),
+    trips: Type.Array(
+      Type.Object({
+        id: Type.String({ format: 'uuid' }),
+        pickupLocation: Type.String(),
+        destination: Type.String(),
+        scheduledAt: Type.String({ format: 'date-time' }),
+        scheduledEndAt: Type.String({ format: 'date-time' }),
+        vehicle: Type.Object({ registrationNumber: Type.String(), displayName: Type.String() }),
+      }),
+      { minItems: 1 },
+    ),
   }),
   questionnaire: Type.Object({
     schemaVersion: Type.Literal(2),
@@ -64,7 +72,7 @@ export const passengerContextResponseSchema = Type.Object({ data: passengerConte
 
 export const startFeedbackResponseSchema = Type.Object({
   data: Type.Object({
-    tripId: Type.String({ format: 'uuid' }),
+    engagementId: Type.String({ format: 'uuid' }),
     status: Type.Literal('FEEDBACK_STARTED'),
     startedFeedbackAt: Type.String({ format: 'date-time' }),
   }),
@@ -72,7 +80,7 @@ export const startFeedbackResponseSchema = Type.Object({
 
 export const handoffResponseSchema = Type.Object({
   data: Type.Intersect([
-    tripSchema,
+    engagementSchema,
     Type.Object({
       feedbackAccessToken: Type.String(),
       feedbackAccessTokenExpiresAt: Type.String({ format: 'date-time' }),
@@ -83,7 +91,7 @@ export const handoffResponseSchema = Type.Object({
 
 export const feedbackLinkResponseSchema = Type.Object({
   data: Type.Object({
-    tripId: Type.String({ format: 'uuid' }),
+    engagementId: Type.String({ format: 'uuid' }),
     feedbackLink: Type.String({ format: 'uri' }),
     feedbackAccessTokenExpiresAt: Type.String({ format: 'date-time' }),
   }),
@@ -91,7 +99,7 @@ export const feedbackLinkResponseSchema = Type.Object({
 
 export const adminFeedbackShareResponseSchema = Type.Object({
   data: Type.Object({
-    tripId: Type.String({ format: 'uuid' }),
+    engagementId: Type.String({ format: 'uuid' }),
     feedbackLink: Type.String({ format: 'uri' }),
     feedbackAccessTokenExpiresAt: Type.String({ format: 'date-time' }),
     recipient: Type.Object({
@@ -174,7 +182,7 @@ export const submissionReceiptSchema = Type.Object({
   data: Type.Object({
     id: Type.String({ format: 'uuid' }),
     clientSubmissionId: Type.String({ format: 'uuid' }),
-    tripId: Type.String({ format: 'uuid' }),
+    engagementId: Type.String({ format: 'uuid' }),
     receivedAt: Type.String({ format: 'date-time' }),
     submissionMode: Type.Union([Type.Literal('ONLINE'), Type.Literal('OFFLINE_SYNC')]),
     replayed: Type.Boolean(),

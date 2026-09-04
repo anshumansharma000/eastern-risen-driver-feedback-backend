@@ -13,6 +13,10 @@ import {
 import { authRoutes } from './modules/auth/auth.routes.js';
 import { bookingRoutes } from './modules/bookings/booking.routes.js';
 import { driverRoutes } from './modules/drivers/driver.routes.js';
+import {
+  adminEngagementRoutes,
+  driverEngagementRoutes,
+} from './modules/engagements/engagement.routes.js';
 import { adminFeedbackRoutes } from './modules/feedback/admin-feedback.routes.js';
 import { feedbackRoutes } from './modules/feedback/feedback.routes.js';
 import { healthRoutes } from './modules/health/health.routes.js';
@@ -77,6 +81,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         { name: 'bookings', description: 'Passenger bookings spanning one or more trips' },
         { name: 'trips', description: 'Administrator trip management' },
         { name: 'driver trips', description: 'Trips assigned to the authenticated driver' },
+        { name: 'engagements', description: 'Derived booking driver engagements' },
+        {
+          name: 'driver engagements',
+          description: 'Feedback engagements assigned to the authenticated driver',
+        },
         {
           name: 'questionnaires',
           description: 'Versioned questionnaire and consent configuration',
@@ -136,19 +145,29 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       prefix: '/api/v1/admin/bookings',
       guards: options.services.guards,
       bookingService: options.services.bookingService,
-      tripService: options.services.tripService,
+      engagementService: options.services.engagementService,
     });
     await app.register(adminTripRoutes, {
       prefix: '/api/v1/admin/trips',
       guards: options.services.guards,
-      bookingService: options.services.bookingService,
       tripService: options.services.tripService,
+    });
+    await app.register(adminEngagementRoutes, {
+      prefix: '/api/v1/admin/engagements',
+      guards: options.services.guards,
+      bookingService: options.services.bookingService,
+      engagementService: options.services.engagementService,
       feedbackService: options.services.feedbackService,
     });
     await app.register(driverTripRoutes, {
       prefix: '/api/v1/driver/trips',
       guards: options.services.guards,
       tripService: options.services.tripService,
+    });
+    await app.register(driverEngagementRoutes, {
+      prefix: '/api/v1/driver/engagements',
+      guards: options.services.guards,
+      engagementService: options.services.engagementService,
       feedbackService: options.services.feedbackService,
     });
     await app.register(questionnaireRoutes, {

@@ -26,17 +26,17 @@ import {
   questionType,
 } from './enums.js';
 import { consentVersions, questionnaireVersions, versionQuestions } from './questionnaires.js';
-import { trips } from './trips.js';
+import { bookingDriverEngagements } from './trips.js';
 import { vendors } from './vendors.js';
 
 export const feedbackHandoffs = pgTable(
   'feedback_handoffs',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    tripId: uuid('trip_id')
+    engagementId: uuid('engagement_id')
       .notNull()
       .unique()
-      .references(() => trips.id, { onDelete: 'cascade' }),
+      .references(() => bookingDriverEngagements.id, { onDelete: 'cascade' }),
     questionnaireVersionId: uuid('questionnaire_version_id').references(
       () => questionnaireVersions.id,
       { onDelete: 'restrict' },
@@ -85,9 +85,9 @@ export const feedbackSubmissions = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     clientSubmissionId: uuid('client_submission_id').notNull(),
-    tripId: uuid('trip_id')
+    engagementId: uuid('engagement_id')
       .notNull()
-      .references(() => trips.id, { onDelete: 'restrict' }),
+      .references(() => bookingDriverEngagements.id, { onDelete: 'restrict' }),
     driverId: uuid('driver_id')
       .notNull()
       .references(() => drivers.id, { onDelete: 'restrict' }),
@@ -123,7 +123,7 @@ export const feedbackSubmissions = pgTable(
   },
   (table) => [
     uniqueIndex('feedback_submissions_client_id_unique').on(table.clientSubmissionId),
-    uniqueIndex('feedback_submissions_trip_unique').on(table.tripId),
+    uniqueIndex('feedback_submissions_engagement_unique').on(table.engagementId),
     index('feedback_submissions_driver_received_idx').on(table.driverId, table.receivedAt),
     index('feedback_submissions_review_received_idx').on(
       table.currentReviewState,
@@ -203,9 +203,9 @@ export const feedbackPhotos = pgTable(
   'feedback_photos',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    tripId: uuid('trip_id')
+    engagementId: uuid('engagement_id')
       .notNull()
-      .references(() => trips.id, { onDelete: 'restrict' }),
+      .references(() => bookingDriverEngagements.id, { onDelete: 'restrict' }),
     feedbackSubmissionId: uuid('feedback_submission_id').references(() => feedbackSubmissions.id, {
       onDelete: 'restrict',
     }),
@@ -225,7 +225,7 @@ export const feedbackPhotos = pgTable(
     uniqueIndex('feedback_photos_upload_object_key_unique').on(table.uploadObjectKey),
     uniqueIndex('feedback_photos_object_key_unique').on(table.objectKey),
     uniqueIndex('feedback_photos_submission_unique').on(table.feedbackSubmissionId),
-    index('feedback_photos_trip_status_idx').on(table.tripId, table.status),
+    index('feedback_photos_engagement_status_idx').on(table.engagementId, table.status),
     index('feedback_photos_status_created_idx').on(table.status, table.createdAt),
     index('feedback_photos_upload_cleanup_idx').on(
       table.uploadExpiresAt,

@@ -7,6 +7,7 @@ import { DrizzleAuthRepository } from './modules/auth/auth.repository.js';
 import { createAuthGuards, type AuthGuards } from './modules/auth/auth.guard.js';
 import { passwordHasher } from './modules/auth/password.js';
 import { DriverService } from './modules/drivers/driver.service.js';
+import { EngagementService } from './modules/engagements/engagement.service.js';
 import { FeedbackService } from './modules/feedback/feedback.service.js';
 import { AdminFeedbackService } from './modules/feedback/admin-feedback.service.js';
 import { QuestionnaireService } from './modules/questionnaires/questionnaire.service.js';
@@ -26,6 +27,7 @@ export interface ApplicationServices {
   readonly adminFeedbackService: AdminFeedbackService;
   readonly guards: AuthGuards;
   readonly driverService: DriverService;
+  readonly engagementService: EngagementService;
   readonly feedbackService: FeedbackService;
   readonly questionnaireService: QuestionnaireService;
   readonly settingsService: SettingsService;
@@ -48,6 +50,8 @@ export function createApplicationServices(db: AppDatabase, config: AppConfig): A
   const settingsService = new SettingsService(db);
   const encryptor = createFieldEncryptor(config.dataEncryptionKey);
   const photoStorage = config.r2 ? new R2PhotoStorage(config.r2) : new DisabledPhotoStorage();
+  const tripService = new TripService(db);
+  const engagementService = new EngagementService(db, tripService);
   const feedbackService = new FeedbackService(
     db,
     questionnaireService,
@@ -65,10 +69,11 @@ export function createApplicationServices(db: AppDatabase, config: AppConfig): A
     profileService: new ProfileService(db, passwordHasher),
     guards: createAuthGuards(authService, config.sessionCookieName, secureCookie),
     driverService: new DriverService(db, passwordHasher),
+    engagementService,
     feedbackService,
     questionnaireService,
     settingsService,
-    tripService: new TripService(db),
+    tripService,
     vehicleService: new VehicleService(db),
     vendorService: new VendorService(db),
     cookieName: config.sessionCookieName,

@@ -1,13 +1,6 @@
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import type { AuthGuards } from '../auth/auth.guard.js';
 import {
-  adminFeedbackShareResponseSchema,
-  feedbackLinkResponseSchema,
-  handoffResponseSchema,
-} from '../feedback/feedback.schemas.js';
-import type { FeedbackService } from '../feedback/feedback.service.js';
-import type { BookingService } from '../bookings/booking.service.js';
-import {
   createAdminTripBodySchema,
   createDriverTripBodySchema,
   driverTripListQuerySchema,
@@ -22,12 +15,10 @@ import { presentTrip } from './trip.presenter.js';
 
 export interface AdminTripRouteOptions {
   readonly guards: AuthGuards;
-  readonly bookingService: BookingService;
   readonly tripService: TripService;
-  readonly feedbackService: FeedbackService;
 }
 
-export type DriverTripRouteOptions = Omit<AdminTripRouteOptions, 'bookingService'>;
+export type DriverTripRouteOptions = AdminTripRouteOptions;
 
 export const adminTripRoutes: FastifyPluginAsyncTypebox<AdminTripRouteOptions> = async (
   app,
@@ -90,31 +81,6 @@ export const adminTripRoutes: FastifyPluginAsyncTypebox<AdminTripRouteOptions> =
       },
     },
     async (request) => ({ data: presentTrip(await options.tripService.get(request.params.id)) }),
-  );
-
-  app.get(
-    '/:id/feedback-link',
-    {
-      schema: {
-        tags: ['trips'],
-        summary: 'Get the shareable passenger feedback link for a trip',
-        params: idParamsSchema,
-        response: { 200: adminFeedbackShareResponseSchema },
-      },
-    },
-    async (request) => {
-      const trip = await options.tripService.get(request.params.id);
-      const [handoff, booking] = await Promise.all([
-        options.feedbackService.issueHandoff(trip.id),
-        options.bookingService.get(trip.bookingId),
-      ]);
-      return {
-        data: {
-          ...presentFeedbackLink(handoff),
-          recipient: { name: booking.passengerName, phone: booking.passengerPhone },
-        },
-      };
-    },
   );
 
   app.patch(
@@ -219,53 +185,4 @@ export const driverTripRoutes: FastifyPluginAsyncTypebox<DriverTripRouteOptions>
       data: presentTrip(await options.tripService.get(request.params.id, request.auth!.driverId!)),
     }),
   );
-
-  app.post(
-    '/:id/start-feedback',
-    {
-      schema: {
-        tags: ['driver trips'],
-        summary: 'Prepare an assigned trip for the passenger feedback handoff',
-        params: idParamsSchema,
-        response: { 200: handoffResponseSchema },
-      },
-    },
-    async (request) => {
-      const trip = await options.tripService.get(request.params.id, request.auth!.driverId!);
-      const handoff = await options.feedbackService.issueHandoff(trip.id);
-      return {
-        data: {
-          ...presentTrip(trip),
-          feedbackAccessToken: handoff.token,
-          feedbackAccessTokenExpiresAt: handoff.expiresAt.toISOString(),
-          feedbackLink: handoff.link,
-        },
-      };
-    },
-  );
-
-  app.get(
-    '/:id/feedback-link',
-    {
-      schema: {
-        tags: ['driver trips'],
-        summary: 'Get the shareable passenger feedback link for an assigned trip',
-        params: idParamsSchema,
-        response: { 200: feedbackLinkResponseSchema },
-      },
-    },
-    async (request) => {
-      const trip = await options.tripService.get(request.params.id, request.auth!.driverId!);
-      const handoff = await options.feedbackService.issueHandoff(trip.id);
-      return { data: presentFeedbackLink(handoff) };
-    },
-  );
 };
-
-function presentFeedbackLink(handoff: Awaited<ReturnType<FeedbackService['issueHandoff']>>) {
-  return {
-    tripId: handoff.tripId,
-    feedbackLink: handoff.link,
-    feedbackAccessTokenExpiresAt: handoff.expiresAt.toISOString(),
-  };
-}

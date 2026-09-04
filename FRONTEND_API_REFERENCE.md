@@ -1,5 +1,9 @@
 # Driver Feedback Frontend API Reference
 
+> Feedback is now scoped to derived booking driver engagements. Use
+> `FRONTEND_ENGAGEMENTS_PROMPT.md` as the authoritative migration contract. Older
+> trip feedback-link and manual `feedbackPurposes` examples below are legacy.
+
 **Service:** Eastern Risen Driver Feedback API  
 **Contract version:** `0.1.0`  
 **Reference status:** Derived from implemented backend routes and TypeBox schemas  

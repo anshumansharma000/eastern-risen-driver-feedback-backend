@@ -1,7 +1,7 @@
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import type { AuthGuards } from '../auth/auth.guard.js';
-import { presentTrip } from '../trips/trip.presenter.js';
-import type { TripService } from '../trips/trip.service.js';
+import { presentEngagement } from '../engagements/engagement.presenter.js';
+import type { EngagementService } from '../engagements/engagement.service.js';
 import {
   bookingDetailResponseSchema,
   bookingListQuerySchema,
@@ -17,7 +17,7 @@ import type { BookingService } from './booking.service.js';
 export const bookingRoutes: FastifyPluginAsyncTypebox<{
   readonly guards: AuthGuards;
   readonly bookingService: BookingService;
-  readonly tripService: TripService;
+  readonly engagementService: EngagementService;
 }> = async (app, options) => {
   app.addHook('preHandler', options.guards.admin);
 
@@ -73,16 +73,19 @@ export const bookingRoutes: FastifyPluginAsyncTypebox<{
       },
     },
     async (request) => {
-      const [booking, trips] = await Promise.all([
+      const [booking, engagements] = await Promise.all([
         options.bookingService.get(request.params.id),
-        options.tripService.listForBooking(request.params.id),
+        options.engagementService.listForBooking(request.params.id),
       ]);
+      const tripCount = engagements.reduce(
+        (total, engagement) => total + engagement.trips.length,
+        0,
+      );
       return {
         data: {
           ...presentBooking(booking),
-          tripCount: trips.length,
-          trips: trips.map(presentTrip),
-          feedbackWarnings: feedbackConfigurationWarnings(trips),
+          tripCount,
+          engagements: engagements.map(presentEngagement),
         },
       };
     },
@@ -125,49 +128,3 @@ export const bookingRoutes: FastifyPluginAsyncTypebox<{
     }),
   );
 };
-
-function feedbackConfigurationWarnings(trips: Awaited<ReturnType<TripService['listForBooking']>>) {
-  const activeTrips = trips.filter((trip) => trip.status !== 'ARCHIVED');
-  const firstTrip = activeTrips[0];
-  const lastTrip = activeTrips.at(-1);
-  const arrivalTrip = activeTrips.find((trip) =>
-    trip.feedbackPurposes.includes('ARRIVAL_EXPERIENCE'),
-  );
-  const tourTrip = activeTrips.find((trip) => trip.feedbackPurposes.includes('TOUR_EXPERIENCE'));
-  const warnings: Array<{
-    code:
-      | 'ARRIVAL_FEEDBACK_MISSING'
-      | 'ARRIVAL_FEEDBACK_NOT_ON_FIRST_TRIP'
-      | 'TOUR_FEEDBACK_MISSING'
-      | 'TOUR_FEEDBACK_NOT_ON_LAST_TRIP';
-    message: string;
-    tripId: string | null;
-  }> = [];
-  if (!arrivalTrip) {
-    warnings.push({
-      code: 'ARRIVAL_FEEDBACK_MISSING',
-      message: 'Assign arrival and booking feedback to the first pickup trip',
-      tripId: null,
-    });
-  } else if (firstTrip && arrivalTrip.id !== firstTrip.id) {
-    warnings.push({
-      code: 'ARRIVAL_FEEDBACK_NOT_ON_FIRST_TRIP',
-      message: 'Arrival and booking feedback is not assigned to the earliest scheduled trip',
-      tripId: arrivalTrip.id,
-    });
-  }
-  if (!tourTrip) {
-    warnings.push({
-      code: 'TOUR_FEEDBACK_MISSING',
-      message: 'Assign tour coordination and experience feedback to the final trip',
-      tripId: null,
-    });
-  } else if (lastTrip && tourTrip.id !== lastTrip.id) {
-    warnings.push({
-      code: 'TOUR_FEEDBACK_NOT_ON_LAST_TRIP',
-      message: 'Tour coordination and experience feedback is not assigned to the last trip',
-      tripId: tourTrip.id,
-    });
-  }
-  return warnings;
-}

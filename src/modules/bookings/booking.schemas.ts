@@ -1,7 +1,7 @@
 import { Type } from 'typebox';
 import { e164PhoneSchema } from '../../shared/http/phone.schemas.js';
 import { idParamsSchema } from '../vendors/vendor.schemas.js';
-import { tripSchema } from '../trips/trip.schemas.js';
+import { engagementSchema } from '../engagements/engagement.schemas.js';
 
 export { idParamsSchema };
 
@@ -81,19 +81,7 @@ export const bookingResponseSchema = Type.Object({ data: bookingSchema });
 export const bookingDetailResponseSchema = Type.Object({
   data: Type.Object({
     ...bookingSchema.properties,
-    trips: Type.Array(tripSchema),
-    feedbackWarnings: Type.Array(
-      Type.Object({
-        code: Type.Union([
-          Type.Literal('ARRIVAL_FEEDBACK_MISSING'),
-          Type.Literal('ARRIVAL_FEEDBACK_NOT_ON_FIRST_TRIP'),
-          Type.Literal('TOUR_FEEDBACK_MISSING'),
-          Type.Literal('TOUR_FEEDBACK_NOT_ON_LAST_TRIP'),
-        ]),
-        message: Type.String(),
-        tripId: Type.Union([Type.String({ format: 'uuid' }), Type.Null()]),
-      }),
-    ),
+    engagements: Type.Array(engagementSchema),
   }),
 });
 export const bookingListResponseSchema = Type.Object({

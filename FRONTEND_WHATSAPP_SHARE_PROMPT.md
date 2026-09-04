@@ -216,3 +216,9 @@ Add tests appropriate to the repository for:
 Run the repository's formatter, linter, type checker, unit tests, and production
 build. Report the files changed, tests run, and any assumption that could not be
 confirmed from the existing frontend.
+
+# Superseded contract notice
+
+Use `FRONTEND_ENGAGEMENTS_PROMPT.md`. Feedback links are now requested with an engagement ID from
+`GET /api/v1/admin/engagements/:engagementId/feedback-link`; the trip endpoint documented below has
+been removed.

@@ -49,7 +49,7 @@ export const adminFeedbackDetailQuerySchema = Type.Object({
 
 export const adminFeedbackSummarySchema = Type.Object({
   id: Type.String({ format: 'uuid' }),
-  tripId: Type.String({ format: 'uuid' }),
+  engagementId: Type.String({ format: 'uuid' }),
   bookingReference: Type.String(),
   respondentName: Type.String(),
   driver: Type.Object({
@@ -99,16 +99,21 @@ export const adminFeedbackDetailSchema = Type.Intersect([
       email: Type.String({ format: 'email' }),
       bookingReference: Type.String(),
     }),
-    trip: Type.Object({
-      pickupLocation: Type.String(),
-      destination: Type.String(),
-      scheduledAt: Type.String({ format: 'date-time' }),
-      scheduledEndAt: Type.String({ format: 'date-time' }),
-      vehicle: Type.Object({
-        registrationNumber: Type.String(),
-        displayName: Type.String(),
+    engagement: Type.Object({ sequenceNumber: Type.Integer({ minimum: 1 }) }),
+    trips: Type.Array(
+      Type.Object({
+        id: Type.String({ format: 'uuid' }),
+        pickupLocation: Type.String(),
+        destination: Type.String(),
+        scheduledAt: Type.String({ format: 'date-time' }),
+        scheduledEndAt: Type.String({ format: 'date-time' }),
+        vehicle: Type.Object({
+          registrationNumber: Type.String(),
+          displayName: Type.String(),
+        }),
       }),
-    }),
+      { minItems: 1 },
+    ),
     consentVersionId: Type.String({ format: 'uuid' }),
     consentedAt: Type.String({ format: 'date-time' }),
     questionnaireSections: Type.Array(

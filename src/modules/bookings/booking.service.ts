@@ -1,6 +1,11 @@
-import { and, asc, count, desc, eq, ne, sql, type SQL } from 'drizzle-orm';
+import { and, count, desc, eq, ne, sql, type SQL } from 'drizzle-orm';
 import type { AppDatabase } from '../../database/client.js';
-import { auditEvents, bookings, tripFeedbackSections, trips } from '../../database/schema/index.js';
+import {
+  auditEvents,
+  bookingDriverEngagements,
+  bookings,
+  trips,
+} from '../../database/schema/index.js';
 import { findPostgresError } from '../../shared/database/postgres-error.js';
 import { AppError } from '../../shared/errors/app-error.js';
 import type { FieldEncryptor } from '../../shared/security/field-encryption.js';
@@ -225,34 +230,28 @@ export class BookingService {
   }
 
   private async validateTourFeedbackConfiguration(bookingId: string) {
-    const [bookingTrips, [tourSection]] = await Promise.all([
-      this.db
-        .select({ id: trips.id })
-        .from(trips)
-        .where(and(eq(trips.bookingId, bookingId), ne(trips.status, 'ARCHIVED')))
-        .orderBy(asc(trips.scheduledAt), asc(trips.createdAt), asc(trips.id)),
-      this.db
-        .select({ tripId: tripFeedbackSections.tripId })
-        .from(tripFeedbackSections)
-        .where(
-          and(
-            eq(tripFeedbackSections.bookingId, bookingId),
-            eq(tripFeedbackSections.purpose, 'TOUR_EXPERIENCE'),
-          ),
-        )
-        .limit(1),
-    ]);
-    if (!bookingTrips.length || !tourSection) {
+    const [lastEngagement] = await this.db
+      .select({
+        id: bookingDriverEngagements.id,
+        hasTour: sql<boolean>`exists (
+          select 1 from "engagement_feedback_sections" as "tour_section"
+          where "tour_section"."engagement_id" = "booking_driver_engagements"."id"
+            and "tour_section"."purpose" = 'TOUR_EXPERIENCE'
+        )`,
+      })
+      .from(bookingDriverEngagements)
+      .where(
+        and(
+          eq(bookingDriverEngagements.bookingId, bookingId),
+          ne(bookingDriverEngagements.status, 'ARCHIVED'),
+        ),
+      )
+      .orderBy(desc(bookingDriverEngagements.sequenceNumber))
+      .limit(1);
+    if (!lastEngagement || !lastEngagement.hasTour) {
       throw new AppError({
         code: 'BOOKING_TOUR_FEEDBACK_MISSING',
-        message: 'Tour experience feedback must be assigned before completing the booking',
-        statusCode: 409,
-      });
-    }
-    if (tourSection.tripId !== bookingTrips.at(-1)!.id) {
-      throw new AppError({
-        code: 'BOOKING_TOUR_FEEDBACK_NOT_ON_LAST_TRIP',
-        message: 'Tour experience feedback must be assigned to the last scheduled trip',
+        message: 'The final engagement must include tour experience feedback',
         statusCode: 409,
       });
     }

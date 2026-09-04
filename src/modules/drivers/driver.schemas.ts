@@ -64,7 +64,9 @@ export const createDriverBodySchema = Type.Object(
     phone: Type.Optional(e164PhoneSchema),
     sourceType: driverSourceSchema,
     vendorId: Type.Optional(Type.Union([Type.String({ format: 'uuid' }), Type.Null()])),
-    assignmentEnabled: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
+    // Keep null first: Ajv's request coercion can otherwise turn null into false
+    // before the service applies the documented default of true.
+    assignmentEnabled: Type.Optional(Type.Union([Type.Null(), Type.Boolean()])),
     shiftStartTime: Type.Optional(Type.Union([shiftTimeSchema, Type.Null()])),
     shiftEndTime: Type.Optional(Type.Union([shiftTimeSchema, Type.Null()])),
     timeZone: Type.Optional(

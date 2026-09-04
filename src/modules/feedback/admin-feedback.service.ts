@@ -3,6 +3,7 @@ import type { AppDatabase } from '../../database/client.js';
 import {
   auditEvents,
   authAccounts,
+  bookingDriverEngagements,
   feedbackAnswers,
   feedbackPhotos,
   feedbackReviewEvents,
@@ -75,7 +76,7 @@ export class AdminFeedbackService {
       this.db
         .select({
           id: feedbackSubmissions.id,
-          tripId: feedbackSubmissions.tripId,
+          engagementId: feedbackSubmissions.engagementId,
           bookingReference: feedbackSubmissions.bookingReferenceSnapshot,
           respondentName: feedbackSubmissions.respondentName,
           driverId: feedbackSubmissions.driverId,
@@ -100,7 +101,7 @@ export class AdminFeedbackService {
         .where(filter)
         .groupBy(
           feedbackSubmissions.id,
-          feedbackSubmissions.tripId,
+          feedbackSubmissions.engagementId,
           feedbackSubmissions.bookingReferenceSnapshot,
           feedbackSubmissions.respondentName,
           feedbackSubmissions.driverId,
@@ -125,21 +126,32 @@ export class AdminFeedbackService {
     const [row] = await this.db
       .select({
         submission: feedbackSubmissions,
-        trip: {
+        engagement: {
+          sequenceNumber: bookingDriverEngagements.sequenceNumber,
+        },
+      })
+      .from(feedbackSubmissions)
+      .innerJoin(
+        bookingDriverEngagements,
+        eq(feedbackSubmissions.engagementId, bookingDriverEngagements.id),
+      )
+      .where(eq(feedbackSubmissions.id, id))
+      .limit(1);
+    if (!row) this.notFound();
+
+    const [engagementTrips, sections, answers, history, [photo]] = await Promise.all([
+      this.db
+        .select({
+          id: trips.id,
           pickupLocation: trips.pickupLocation,
           destination: trips.destination,
           scheduledAt: trips.scheduledAt,
           scheduledEndAt: trips.scheduledEndAt,
           vehicleSnapshot: trips.vehicleSnapshot,
-        },
-      })
-      .from(feedbackSubmissions)
-      .innerJoin(trips, eq(feedbackSubmissions.tripId, trips.id))
-      .where(eq(feedbackSubmissions.id, id))
-      .limit(1);
-    if (!row) this.notFound();
-
-    const [sections, answers, history, [photo]] = await Promise.all([
+        })
+        .from(trips)
+        .where(eq(trips.engagementId, row.submission.engagementId))
+        .orderBy(asc(trips.scheduledAt), asc(trips.createdAt), asc(trips.id)),
       this.db
         .select({
           purpose: feedbackSubmissionSections.purpose,
@@ -203,6 +215,7 @@ export class AdminFeedbackService {
 
     return {
       ...row,
+      trips: engagementTrips,
       answers,
       sections,
       history,

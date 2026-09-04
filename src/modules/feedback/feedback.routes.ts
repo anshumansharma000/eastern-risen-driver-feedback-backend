@@ -25,7 +25,7 @@ export const feedbackRoutes: FastifyPluginAsyncTypebox<FeedbackRouteOptions> = a
       config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
       schema: {
         tags: ['passenger feedback'],
-        summary: 'Load passenger-safe trip, questionnaire, and consent context',
+        summary: 'Load passenger-safe engagement, questionnaire, and consent context',
         response: { 200: passengerContextResponseSchema },
       },
     },
@@ -35,14 +35,19 @@ export const feedbackRoutes: FastifyPluginAsyncTypebox<FeedbackRouteOptions> = a
       );
       return {
         data: {
-          trip: {
-            id: context.trip.id,
-            bookingReference: context.trip.bookingReference,
-            pickupLocation: context.trip.pickupLocation,
-            destination: context.trip.destination,
-            scheduledAt: context.trip.scheduledAt.toISOString(),
-            vehicle: context.trip.vehicleSnapshot,
-            driver: { displayName: context.trip.driverNameSnapshot },
+          engagement: {
+            id: context.engagement.id,
+            sequenceNumber: context.engagement.sequenceNumber,
+            bookingReference: context.engagement.bookingReference,
+            driver: { displayName: context.engagement.driverNameSnapshot },
+            trips: context.engagement.trips.map((trip) => ({
+              id: trip.id,
+              pickupLocation: trip.pickupLocation,
+              destination: trip.destination,
+              scheduledAt: trip.scheduledAt.toISOString(),
+              scheduledEndAt: trip.scheduledEndAt.toISOString(),
+              vehicle: trip.vehicleSnapshot,
+            })),
           },
           questionnaire: context.snapshot,
           consent: {
@@ -78,7 +83,7 @@ export const feedbackRoutes: FastifyPluginAsyncTypebox<FeedbackRouteOptions> = a
       );
       return {
         data: {
-          tripId: result.tripId,
+          engagementId: result.engagementId,
           status: result.status,
           startedFeedbackAt: result.startedFeedbackAt.toISOString(),
         },

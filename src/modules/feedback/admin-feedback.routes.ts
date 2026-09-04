@@ -139,7 +139,7 @@ export const adminFeedbackRoutes: FastifyPluginAsyncTypebox<AdminFeedbackRouteOp
 
 function serializeSummary(item: {
   id: string;
-  tripId: string;
+  engagementId: string;
   bookingReference: string;
   respondentName: string;
   driverId: string;
@@ -155,7 +155,7 @@ function serializeSummary(item: {
 }) {
   return {
     id: item.id,
-    tripId: item.tripId,
+    engagementId: item.engagementId,
     bookingReference: item.bookingReference,
     respondentName: item.respondentName,
     driver: {
@@ -183,13 +183,15 @@ function serializeDetail(result: Awaited<ReturnType<AdminFeedbackService['get']>
       email: result.respondentEmail,
       bookingReference: submission.respondentBookingReference,
     },
-    trip: {
-      pickupLocation: result.trip.pickupLocation,
-      destination: result.trip.destination,
-      scheduledAt: result.trip.scheduledAt.toISOString(),
-      scheduledEndAt: result.trip.scheduledEndAt.toISOString(),
-      vehicle: result.trip.vehicleSnapshot,
-    },
+    engagement: result.engagement,
+    trips: result.trips.map((trip) => ({
+      id: trip.id,
+      pickupLocation: trip.pickupLocation,
+      destination: trip.destination,
+      scheduledAt: trip.scheduledAt.toISOString(),
+      scheduledEndAt: trip.scheduledEndAt.toISOString(),
+      vehicle: trip.vehicleSnapshot,
+    })),
     consentVersionId: submission.consentVersionId,
     consentedAt: submission.consentedAt.toISOString(),
     questionnaireSections: result.sections,
@@ -230,7 +232,7 @@ function serializeSummaryFromDetail(result: Awaited<ReturnType<AdminFeedbackServ
   const submission = result.submission;
   return serializeSummary({
     id: submission.id,
-    tripId: submission.tripId,
+    engagementId: submission.engagementId,
     bookingReference: submission.bookingReferenceSnapshot,
     respondentName: submission.respondentName,
     driverId: submission.driverId,

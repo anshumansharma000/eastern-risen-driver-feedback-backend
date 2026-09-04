@@ -12,28 +12,18 @@ const trip = {
   driverId: '00000000-0000-4000-8000-000000000003',
 };
 
-describe('trip feedback section contract', () => {
-  it('allows defaults to be requested by omitting purposes', () => {
+describe('trip engagement contract', () => {
+  it('accepts trip scheduling without feedback configuration', () => {
     expect(Check(createAdminTripBodySchema, trip)).toBe(true);
   });
 
-  it('accepts explicit section selections and replacement with an empty array', () => {
+  it('rejects manual feedback section assignment', () => {
     expect(
       Check(createAdminTripBodySchema, {
         ...trip,
         feedbackPurposes: ['ARRIVAL_EXPERIENCE', 'DRIVER_FEEDBACK'],
       }),
-    ).toBe(true);
-    expect(Check(updateAdminTripBodySchema, { feedbackPurposes: [] })).toBe(true);
-  });
-
-  it('rejects duplicate and unknown purposes', () => {
-    expect(
-      Check(createAdminTripBodySchema, {
-        ...trip,
-        feedbackPurposes: ['DRIVER_FEEDBACK', 'DRIVER_FEEDBACK'],
-      }),
     ).toBe(false);
-    expect(Check(updateAdminTripBodySchema, { feedbackPurposes: ['UNKNOWN'] })).toBe(false);
+    expect(Check(updateAdminTripBodySchema, { feedbackPurposes: [] })).toBe(false);
   });
 });

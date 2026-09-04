@@ -128,3 +128,8 @@ Add tests appropriate to the repository proving that:
 Run the repository's formatter, linter, type checker, unit tests, and production
 build. Report the files changed, tests run, and any assumption that could not be
 confirmed from the existing frontend.
+
+# Superseded feedback configuration notice
+
+Use `FRONTEND_ENGAGEMENTS_PROMPT.md` for feedback UI. Booking feedback sections are now derived from
+driver engagements and must not be manually assigned to trips.

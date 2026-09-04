@@ -1,13 +1,13 @@
-import { and, asc, count, desc, eq, gt, lt, ne, sql, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, inArray, isNull, lt, ne, sql, type SQL } from 'drizzle-orm';
 import type { AppDatabase } from '../../database/client.js';
 import {
   auditEvents,
   authAccounts,
+  bookingDriverEngagements,
   bookings,
   driverLeavePeriods,
   drivers,
-  feedbackHandoffs,
-  tripFeedbackSections,
+  engagementFeedbackSections,
   trips,
   vehicles,
   vendors,
@@ -30,7 +30,6 @@ export interface CreateTripInput {
   readonly scheduledEndAt: string;
   readonly vehicleId: string;
   readonly driverId: string;
-  readonly feedbackPurposes?: readonly QuestionnairePurpose[];
 }
 
 export interface UpdateTripInput {
@@ -41,7 +40,6 @@ export interface UpdateTripInput {
   readonly scheduledEndAt?: string;
   readonly vehicleId?: string;
   readonly driverId?: string;
-  readonly feedbackPurposes?: readonly QuestionnairePurpose[];
 }
 
 export interface ListTripsInput {
@@ -56,6 +54,7 @@ export interface ListTripsInput {
 const tripSelection = {
   id: trips.id,
   bookingId: trips.bookingId,
+  engagementId: trips.engagementId,
   bookingReference: bookings.bookingReference,
   passengerName: bookings.passengerName,
   pickupLocation: trips.pickupLocation,
@@ -77,8 +76,8 @@ const tripSelection = {
       when 'DRIVER_FEEDBACK' then 1
       when 'TOUR_EXPERIENCE' then 2
     end)
-    from "trip_feedback_sections" as "trip_sections"
-    where "trip_sections"."trip_id" = "trips"."id"
+    from "engagement_feedback_sections" as "trip_sections"
+    where "trip_sections"."engagement_id" = "trips"."engagement_id"
   ), '[]'::json)`,
   status: trips.status,
   startedFeedbackAt: trips.startedFeedbackAt,
@@ -129,6 +128,10 @@ export class TripService {
           `driver:${driverId}`,
           `vehicle:${vehicleId}`,
         ]);
+        await this.ensureBookingScheduleEditable(tx, current.bookingId);
+        if (bookingId !== current.bookingId)
+          await this.ensureBookingScheduleEditable(tx, bookingId);
+        await this.ensureTripEngagementEditable(tx, id);
         const booking = await this.resolveBooking(bookingId, tx);
         const driver = await this.resolveDriver(driverId, tx);
         const vehicle = await this.resolveVehicle(vehicleId, tx);
@@ -170,16 +173,9 @@ export class TripService {
             statusCode: 409,
           });
         }
-        if (input.feedbackPurposes !== undefined || bookingId !== current.bookingId) {
-          await this.replaceFeedbackSections(
-            tx,
-            id,
-            bookingId,
-            input.feedbackPurposes ?? current.feedbackPurposes,
-            actorAccountId,
-          );
-          await tx.delete(feedbackHandoffs).where(eq(feedbackHandoffs.tripId, id));
-        }
+        await this.rebuildEngagements(tx, current.bookingId, actorAccountId);
+        if (bookingId !== current.bookingId)
+          await this.rebuildEngagements(tx, bookingId, actorAccountId);
         await tx.insert(auditEvents).values({
           actorAccountId,
           action: 'TRIP_UPDATED',
@@ -241,8 +237,31 @@ export class TripService {
       .orderBy(asc(trips.scheduledAt), asc(trips.createdAt), asc(trips.id));
   }
 
+  async listForEngagementIds(engagementIds: readonly string[]) {
+    if (!engagementIds.length) return [];
+    return this.db
+      .select(tripSelection)
+      .from(trips)
+      .innerJoin(bookings, eq(bookings.id, trips.bookingId))
+      .where(inArray(trips.engagementId, [...engagementIds]))
+      .orderBy(asc(trips.scheduledAt), asc(trips.createdAt), asc(trips.id));
+  }
+
   async archive(id: string, actorAccountId: string) {
     return this.db.transaction(async (tx) => {
+      const current = await this.findTrip(tx, eq(trips.id, id));
+      if (!current) {
+        throw new AppError({
+          code: 'TRIP_NOT_FOUND',
+          message: 'Trip was not found',
+          statusCode: 404,
+        });
+      }
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtextextended(${'booking:' + current.bookingId}, 0))`,
+      );
+      await this.ensureBookingScheduleEditable(tx, current.bookingId);
+      await this.ensureTripEngagementEditable(tx, id);
       const now = new Date();
       const [updated] = await tx
         .update(trips)
@@ -262,7 +281,7 @@ export class TripService {
         entityType: 'TRIP',
         entityId: id,
       });
-      await tx.delete(tripFeedbackSections).where(eq(tripFeedbackSections.tripId, id));
+      await this.rebuildEngagements(tx, current.bookingId, actorAccountId);
       return (await this.findTrip(tx, eq(trips.id, id)))!;
     });
   }
@@ -280,6 +299,7 @@ export class TripService {
           `driver:${input.driverId}`,
           `vehicle:${input.vehicleId}`,
         ]);
+        await this.ensureBookingScheduleEditable(tx, input.bookingId);
         const booking = await this.resolveBooking(input.bookingId, tx);
         const driver = await this.resolveDriver(input.driverId, tx);
         const vehicle = await this.resolveVehicle(input.vehicleId, tx);
@@ -308,15 +328,7 @@ export class TripService {
             createdByAccountId: actorAccountId,
           })
           .returning({ id: trips.id });
-        const feedbackPurposes =
-          input.feedbackPurposes ?? (await this.defaultFeedbackPurposes(tx, booking.id));
-        await this.replaceFeedbackSections(
-          tx,
-          created!.id,
-          booking.id,
-          feedbackPurposes,
-          actorAccountId,
-        );
+        await this.rebuildEngagements(tx, booking.id, actorAccountId);
         const trip = await this.findTrip(tx, eq(trips.id, created!.id));
         await tx.insert(auditEvents).values({
           actorAccountId,
@@ -561,40 +573,179 @@ export class TripService {
     }
   }
 
-  private async defaultFeedbackPurposes(
-    database: AppTransaction,
-    bookingId: string,
-  ): Promise<QuestionnairePurpose[]> {
-    const [arrival] = await database
-      .select({ tripId: tripFeedbackSections.tripId })
-      .from(tripFeedbackSections)
+  private async ensureBookingScheduleEditable(database: AppTransaction, bookingId: string) {
+    const [lockedTour] = await database
+      .select({ id: bookingDriverEngagements.id })
+      .from(bookingDriverEngagements)
+      .innerJoin(
+        engagementFeedbackSections,
+        eq(engagementFeedbackSections.engagementId, bookingDriverEngagements.id),
+      )
       .where(
         and(
-          eq(tripFeedbackSections.bookingId, bookingId),
-          eq(tripFeedbackSections.purpose, 'ARRIVAL_EXPERIENCE'),
+          eq(bookingDriverEngagements.bookingId, bookingId),
+          inArray(bookingDriverEngagements.status, ['FEEDBACK_STARTED', 'SUBMITTED']),
+          eq(engagementFeedbackSections.purpose, 'TOUR_EXPERIENCE'),
         ),
       )
       .limit(1);
-    return arrival ? ['DRIVER_FEEDBACK'] : ['ARRIVAL_EXPERIENCE', 'DRIVER_FEEDBACK'];
+    if (lockedTour) {
+      throw new AppError({
+        code: 'BOOKING_SCHEDULE_LOCKED_BY_FEEDBACK',
+        message: 'Trips cannot be changed after final tour feedback has started for this booking',
+        statusCode: 409,
+      });
+    }
   }
 
-  private async replaceFeedbackSections(
+  private async ensureTripEngagementEditable(database: AppTransaction, tripId: string) {
+    const [engagement] = await database
+      .select({ status: bookingDriverEngagements.status })
+      .from(trips)
+      .innerJoin(bookingDriverEngagements, eq(bookingDriverEngagements.id, trips.engagementId))
+      .where(eq(trips.id, tripId))
+      .limit(1);
+    if (engagement && engagement.status !== 'READY') {
+      throw new AppError({
+        code: 'TRIP_ENGAGEMENT_LOCKED_BY_FEEDBACK',
+        message: 'This trip belongs to an engagement whose passenger feedback has started',
+        statusCode: 409,
+      });
+    }
+  }
+
+  private async rebuildEngagements(
     database: AppTransaction,
-    tripId: string,
     bookingId: string,
-    purposes: readonly QuestionnairePurpose[],
     actorAccountId: string,
   ) {
-    await database.delete(tripFeedbackSections).where(eq(tripFeedbackSections.tripId, tripId));
-    if (!purposes.length) return;
-    await database.insert(tripFeedbackSections).values(
-      purposes.map((purpose) => ({
-        tripId,
-        bookingId,
-        purpose,
-        assignedByAccountId: actorAccountId,
-      })),
-    );
+    const lockedEngagements = await database
+      .select({
+        id: bookingDriverEngagements.id,
+        sequenceNumber: bookingDriverEngagements.sequenceNumber,
+      })
+      .from(bookingDriverEngagements)
+      .where(
+        and(
+          eq(bookingDriverEngagements.bookingId, bookingId),
+          inArray(bookingDriverEngagements.status, ['FEEDBACK_STARTED', 'SUBMITTED']),
+        ),
+      )
+      .orderBy(asc(bookingDriverEngagements.sequenceNumber));
+    const readyEngagements = await database
+      .select({ id: bookingDriverEngagements.id })
+      .from(bookingDriverEngagements)
+      .where(
+        and(
+          eq(bookingDriverEngagements.bookingId, bookingId),
+          eq(bookingDriverEngagements.status, 'READY'),
+        ),
+      );
+    const readyIds = readyEngagements.map((engagement) => engagement.id);
+    if (readyIds.length) {
+      await database
+        .update(trips)
+        .set({ engagementId: null })
+        .where(inArray(trips.engagementId, readyIds));
+    }
+    await database
+      .delete(bookingDriverEngagements)
+      .where(
+        and(
+          eq(bookingDriverEngagements.bookingId, bookingId),
+          eq(bookingDriverEngagements.status, 'READY'),
+        ),
+      );
+
+    const scheduledTrips = await database
+      .select()
+      .from(trips)
+      .where(
+        and(
+          eq(trips.bookingId, bookingId),
+          ne(trips.status, 'ARCHIVED'),
+          isNull(trips.engagementId),
+        ),
+      )
+      .orderBy(asc(trips.scheduledAt), asc(trips.createdAt), asc(trips.id));
+    if (lockedEngagements.length) {
+      const lockedTrips = await database
+        .select({
+          scheduledAt: trips.scheduledAt,
+          createdAt: trips.createdAt,
+          id: trips.id,
+        })
+        .from(trips)
+        .where(
+          inArray(
+            trips.engagementId,
+            lockedEngagements.map((item) => item.id),
+          ),
+        )
+        .orderBy(desc(trips.scheduledAt), desc(trips.createdAt), desc(trips.id))
+        .limit(1);
+      const lastLockedTrip = lockedTrips[0];
+      const firstEditableTrip = scheduledTrips[0];
+      if (
+        lastLockedTrip &&
+        firstEditableTrip &&
+        compareTripOrder(firstEditableTrip, lastLockedTrip) <= 0
+      ) {
+        throw new AppError({
+          code: 'BOOKING_FEEDBACK_SEQUENCE_CONFLICT',
+          message: 'Future trips must remain after every engagement whose feedback has started',
+          statusCode: 409,
+        });
+      }
+      if (!scheduledTrips.length) {
+        throw new AppError({
+          code: 'BOOKING_FINAL_ENGAGEMENT_REQUIRED',
+          message: 'At least one future engagement is required after previously started feedback',
+          statusCode: 409,
+        });
+      }
+    }
+    const groups = deriveEngagementGroups(scheduledTrips);
+    const sequenceOffset = lockedEngagements.at(-1)?.sequenceNumber ?? 0;
+
+    for (const [index, group] of groups.entries()) {
+      const firstTrip = group[0]!;
+      const [engagement] = await database
+        .insert(bookingDriverEngagements)
+        .values({
+          bookingId,
+          sequenceNumber: sequenceOffset + index + 1,
+          driverId: firstTrip.driverId,
+          driverNameSnapshot: firstTrip.driverNameSnapshot,
+          driverCodeSnapshot: firstTrip.driverCodeSnapshot,
+          driverSourceSnapshot: firstTrip.driverSourceSnapshot,
+          vendorId: firstTrip.vendorId,
+          vendorNameSnapshot: firstTrip.vendorNameSnapshot,
+        })
+        .returning({ id: bookingDriverEngagements.id });
+      if (!engagement) throw new Error('Engagement insert did not return a row');
+      await database
+        .update(trips)
+        .set({ engagementId: engagement.id })
+        .where(
+          inArray(
+            trips.id,
+            group.map((trip) => trip.id),
+          ),
+        );
+
+      const purposes: QuestionnairePurpose[] = ['DRIVER_FEEDBACK'];
+      if (index === 0 && lockedEngagements.length === 0) purposes.unshift('ARRIVAL_EXPERIENCE');
+      if (index === groups.length - 1) purposes.push('TOUR_EXPERIENCE');
+      await database.insert(engagementFeedbackSections).values(
+        purposes.map((purpose) => ({
+          engagementId: engagement.id,
+          bookingId,
+          purpose,
+          assignedByAccountId: actorAccountId,
+        })),
+      );
+    }
   }
 
   private validateShift(
@@ -625,15 +776,39 @@ export class TripService {
 
   private mapAssignmentDatabaseError(error: unknown): unknown {
     const postgresError = findPostgresError(error, '23505');
-    if (postgresError?.constraint === 'trip_feedback_sections_booking_boundary_unique') {
+    if (postgresError?.constraint === 'engagement_feedback_sections_booking_boundary_unique') {
       return new AppError({
         code: 'BOOKING_FEEDBACK_PURPOSE_ALREADY_ASSIGNED',
-        message: 'Arrival and tour feedback can each be assigned to only one trip per booking',
+        message:
+          'Arrival and tour feedback can each be assigned to only one engagement per booking',
         statusCode: 409,
       });
     }
     return error;
   }
+}
+
+export function deriveEngagementGroups<T extends { readonly driverId: string }>(
+  chronologicallyOrderedTrips: readonly T[],
+): T[][] {
+  const groups: T[][] = [];
+  for (const trip of chronologicallyOrderedTrips) {
+    const current = groups.at(-1);
+    if (current?.[0]?.driverId === trip.driverId) current.push(trip);
+    else groups.push([trip]);
+  }
+  return groups;
+}
+
+function compareTripOrder(
+  left: { readonly scheduledAt: Date; readonly createdAt: Date; readonly id: string },
+  right: { readonly scheduledAt: Date; readonly createdAt: Date; readonly id: string },
+): number {
+  return (
+    left.scheduledAt.getTime() - right.scheduledAt.getTime() ||
+    left.createdAt.getTime() - right.createdAt.getTime() ||
+    left.id.localeCompare(right.id)
+  );
 }
 
 function normalizeComparable(value: string): string {

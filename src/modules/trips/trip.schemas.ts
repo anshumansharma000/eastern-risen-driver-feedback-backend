@@ -22,7 +22,7 @@ export const questionnairePurposeSchema = Type.Union([
   Type.Literal('TOUR_EXPERIENCE'),
 ]);
 
-const feedbackPurposesSchema = Type.Array(questionnairePurposeSchema, {
+export const feedbackPurposesSchema = Type.Array(questionnairePurposeSchema, {
   maxItems: 3,
   uniqueItems: true,
 });
@@ -40,13 +40,12 @@ export const createAdminTripBodySchema = Type.Object(
   {
     ...tripFields,
     driverId: Type.String({ format: 'uuid' }),
-    feedbackPurposes: Type.Optional(feedbackPurposesSchema),
   },
   { additionalProperties: false },
 );
 
 export const createDriverTripBodySchema = Type.Object(
-  { ...tripFields, feedbackPurposes: Type.Optional(feedbackPurposesSchema) },
+  { ...tripFields },
   { additionalProperties: false },
 );
 
@@ -59,7 +58,6 @@ export const updateAdminTripBodySchema = Type.Object(
     scheduledEndAt: Type.Optional(tripFields.scheduledEndAt),
     vehicleId: Type.Optional(tripFields.vehicleId),
     driverId: Type.Optional(Type.String({ format: 'uuid' })),
-    feedbackPurposes: Type.Optional(feedbackPurposesSchema),
   },
   { additionalProperties: false, minProperties: 1 },
 );
@@ -81,6 +79,7 @@ export const driverTripListQuerySchema = Type.Object({
 
 export const tripSchema = Type.Object({
   id: Type.String({ format: 'uuid' }),
+  engagementId: Type.Union([Type.String({ format: 'uuid' }), Type.Null()]),
   booking: Type.Object({
     id: Type.String({ format: 'uuid' }),
     bookingReference: Type.String(),

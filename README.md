@@ -78,7 +78,14 @@ The password is hashed with Argon2id before insertion and is never printed.
 - `POST /api/v1/admin/trips/:id/archive`
 - `GET|POST /api/v1/driver/trips`
 - `GET /api/v1/driver/trips/:id`
-- `POST /api/v1/driver/trips/:id/start-feedback`
+- `GET /api/v1/admin/engagements`
+- `GET /api/v1/admin/engagements/:id`
+- `PATCH /api/v1/admin/engagements/:id/feedback-sections`
+- `GET /api/v1/admin/engagements/:id/feedback-link`
+- `GET /api/v1/driver/engagements`
+- `GET /api/v1/driver/engagements/:id`
+- `GET /api/v1/driver/engagements/:id/feedback-link`
+- `POST /api/v1/driver/engagements/:id/start-feedback`
 - `GET|POST /api/v1/admin/questionnaires`
 - `PATCH /api/v1/admin/questionnaires/:id`
 - `POST /api/v1/admin/questionnaires/:id/archive`
@@ -147,8 +154,8 @@ and payload-encryption key management are selected.
 Vehicle and trip mutations are audited as well. An administrator can manage
 vehicles, create and assign trips, edit trips while they remain `READY`, and
 archive trips without deleting their history. Drivers can list only their own
-assigned trips, enter a trip for themselves, and transition a ready trip to
-`FEEDBACK_STARTED`.
+assigned trips and engagements and enter trips for themselves. Passenger feedback
+lifecycle state belongs to an engagement rather than an individual trip.
 
 Each trip stores immutable snapshots of the selected vehicle, driver identity,
 driver source, and outsourced vendor. A trip can be created only with an active
@@ -164,7 +171,15 @@ activating, deactivating, and archiving questions. Publishing retires the prior
 globally active version in the same transaction. Passenger consent notices are
 versioned and immutable as well.
 
-Starting feedback returns a one-time opaque `feedbackAccessToken`. Send it as
+Consecutive chronological trips with the same driver are grouped into a booking
+driver engagement. A driver change creates a new engagement, so `A → B → A`
+produces three engagements. First, middle, final, and single engagements receive
+the appropriate arrival, driver, and tour questionnaire sections automatically.
+An administrator may customize a non-empty set of sections while the engagement
+is `READY`; editing them revokes any previously issued feedback link. Arrival and
+tour sections can each belong to only one engagement in a booking.
+
+Starting engagement feedback returns a one-time opaque `feedbackAccessToken`. Send it as
 `Authorization: Bearer <token>` to the passenger context and submission APIs.
 The context contains the exact questionnaire snapshot that the frontend must
 persist with its offline envelope and return as `questionnaireSnapshot` during
@@ -173,7 +188,7 @@ submission.
 The frontend must create `clientSubmissionId` before its first submission
 attempt and reuse it for every retry. Repeating an accepted ID returns HTTP 200
 with `replayed: true`. A new ID for a trip that already has feedback returns
-`TRIP_FEEDBACK_ALREADY_SUBMITTED`. New submissions return HTTP 201. Use
+`ENGAGEMENT_FEEDBACK_ALREADY_SUBMITTED`. New submissions return HTTP 201. Use
 `submissionMode: OFFLINE_SYNC` for queued responses; these receipts report
 `rewardEligible: false`.
 
