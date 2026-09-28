@@ -2,7 +2,13 @@ import { Type } from 'typebox';
 
 export const principalSchema = Type.Object({
   accountId: Type.String({ format: 'uuid' }),
-  role: Type.Union([Type.Literal('ADMIN'), Type.Literal('DRIVER')]),
+  role: Type.Union([
+    Type.Literal('ADMIN'),
+    Type.Literal('DRIVER'),
+    Type.Literal('CORE_ADMIN'),
+    Type.Literal('CORE_REPORT_VIEWER'),
+    Type.Literal('CORE_DATA_ENTRY'),
+  ]),
   displayName: Type.String(),
   driverId: Type.Union([Type.String({ format: 'uuid' }), Type.Null()]),
 });

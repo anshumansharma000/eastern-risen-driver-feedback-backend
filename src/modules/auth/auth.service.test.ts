@@ -16,6 +16,7 @@ const activeAdmin: AuthAccount = {
 
 function createRepository(account: AuthAccount | null = activeAdmin): AuthRepository {
   return {
+    findCoreByUsername: vi.fn().mockResolvedValue(account),
     findAdminByEmail: vi.fn().mockResolvedValue(account),
     findDriverByCode: vi.fn().mockResolvedValue(account),
     createSession: vi.fn().mockResolvedValue(undefined),

@@ -1,11 +1,14 @@
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import { Type } from 'typebox';
+import { AppError } from '../../shared/errors/app-error.js';
 import { sessionCookieClearOptions, type AuthGuards } from '../auth/auth.guard.js';
 import {
   adminProfileSchema,
   changePasswordBodySchema,
+  coreProfileSchema,
   driverProfileSchema,
   updateAdminProfileBodySchema,
+  updateCoreProfileBodySchema,
   updateDriverProfileBodySchema,
 } from './profile.schemas.js';
 import type { ProfileService } from './profile.service.js';
@@ -50,6 +53,58 @@ export const adminProfileRoutes: FastifyPluginAsyncTypebox<ProfileRouteOptions> 
     async (request) => ({
       data: serializeAdminProfile(
         await options.profileService.updateAdmin(request.auth!.accountId, request.body),
+      ),
+    }),
+  );
+
+  registerChangePassword(app, options);
+};
+
+export const coreProfileRoutes: FastifyPluginAsyncTypebox<ProfileRouteOptions> = async (
+  app,
+  options,
+) => {
+  app.addHook('preHandler', async (request, reply) => {
+    await options.guards.authenticated.call(app, request, reply);
+    if (
+      !request.auth ||
+      !['CORE_ADMIN', 'CORE_REPORT_VIEWER', 'CORE_DATA_ENTRY'].includes(request.auth.role)
+    ) {
+      throw new AppError({
+        code: 'CORE_ACCESS_REQUIRED',
+        message: 'Your account does not have permission for this core operation',
+        statusCode: 403,
+      });
+    }
+  });
+
+  app.get(
+    '/',
+    {
+      schema: {
+        tags: ['profiles'],
+        summary: 'Get the authenticated core user profile',
+        response: { 200: Type.Object({ data: coreProfileSchema }) },
+      },
+    },
+    async (request) => ({
+      data: serializeCoreProfile(await options.profileService.getCore(request.auth!.accountId)),
+    }),
+  );
+
+  app.patch(
+    '/',
+    {
+      schema: {
+        tags: ['profiles'],
+        summary: 'Update the authenticated core user profile',
+        body: updateCoreProfileBodySchema,
+        response: { 200: Type.Object({ data: coreProfileSchema }) },
+      },
+    },
+    async (request) => ({
+      data: serializeCoreProfile(
+        await options.profileService.updateCore(request.auth!.accountId, request.body),
       ),
     }),
   );
@@ -152,5 +207,16 @@ function serializeDriverProfile(profile: Awaited<ReturnType<ProfileService['getD
     updatedAt: updatedAt.toISOString(),
     shiftStartTime: shiftStartTime?.slice(0, 5) ?? null,
     shiftEndTime: shiftEndTime?.slice(0, 5) ?? null,
+  };
+}
+
+function serializeCoreProfile(profile: Awaited<ReturnType<ProfileService['getCore']>>) {
+  const { passwordChangedAt, lastLoginAt, createdAt, updatedAt, ...rest } = profile;
+  return {
+    ...rest,
+    passwordChangedAt: passwordChangedAt.toISOString(),
+    lastLoginAt: lastLoginAt?.toISOString() ?? null,
+    createdAt: createdAt.toISOString(),
+    updatedAt: updatedAt.toISOString(),
   };
 }

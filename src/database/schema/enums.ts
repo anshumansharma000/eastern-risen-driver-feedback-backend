@@ -1,6 +1,12 @@
 import { pgEnum } from 'drizzle-orm/pg-core';
 
-export const accountRole = pgEnum('account_role', ['ADMIN', 'DRIVER']);
+export const accountRole = pgEnum('account_role', [
+  'ADMIN',
+  'DRIVER',
+  'CORE_ADMIN',
+  'CORE_REPORT_VIEWER',
+  'CORE_DATA_ENTRY',
+]);
 export const lifecycleStatus = pgEnum('lifecycle_status', ['ACTIVE', 'DEACTIVATED', 'ARCHIVED']);
 export const driverSourceType = pgEnum('driver_source_type', ['AGENCY', 'OUTSOURCED']);
 export const tripCreationSource = pgEnum('trip_creation_source', [

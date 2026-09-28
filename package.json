@@ -25,7 +25,9 @@
     "admin:create": "tsx src/scripts/create-admin.ts",
     "session:cleanup": "tsx src/scripts/cleanup-sessions.ts",
     "photos:cleanup": "tsx src/scripts/cleanup-photo-uploads.ts",
-    "photos:smoke": "tsx src/scripts/smoke-r2-photo.ts"
+    "photos:smoke": "tsx src/scripts/smoke-r2-photo.ts",
+    "core:admin:create": "tsx src/scripts/create-core-admin.ts",
+    "core:invoice:import": "tsx src/scripts/import-core-invoice.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1111.0",

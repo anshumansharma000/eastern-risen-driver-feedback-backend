@@ -1,4 +1,4 @@
-import { and, eq, isNull, ne } from 'drizzle-orm';
+import { and, eq, inArray, isNull, ne } from 'drizzle-orm';
 import type { AppDatabase } from '../../database/client.js';
 import {
   auditEvents,
@@ -7,11 +7,12 @@ import {
   drivers,
   vendors,
 } from '../../database/schema/index.js';
-import { isPostgresError } from '../../shared/database/postgres-error.js';
+import { findPostgresError } from '../../shared/database/postgres-error.js';
 import { AppError } from '../../shared/errors/app-error.js';
 import type { PasswordHasher } from '../auth/password.js';
 
 export interface UpdateProfileInput {
+  readonly username?: string;
   readonly displayName?: string;
   readonly email?: string;
   readonly phone?: string | null;
@@ -27,6 +28,13 @@ const adminProfileSelection = {
   lastLoginAt: authAccounts.lastLoginAt,
   createdAt: authAccounts.createdAt,
   updatedAt: authAccounts.updatedAt,
+};
+
+const coreRoles = ['CORE_ADMIN', 'CORE_REPORT_VIEWER', 'CORE_DATA_ENTRY'] as const;
+
+const coreProfileSelection = {
+  ...adminProfileSelection,
+  username: authAccounts.username,
 };
 
 const driverProfileSelection = {
@@ -72,6 +80,20 @@ export class ProfileService {
     return { ...profile, role: 'DRIVER' as const };
   }
 
+  async getCore(accountId: string) {
+    const [profile] = await this.db
+      .select(coreProfileSelection)
+      .from(authAccounts)
+      .where(and(eq(authAccounts.id, accountId), inArray(authAccounts.role, coreRoles)))
+      .limit(1);
+    if (!profile?.username) this.notFound();
+    return {
+      ...profile,
+      username: profile.username,
+      role: profile.role as (typeof coreRoles)[number],
+    };
+  }
+
   async updateAdmin(accountId: string, input: UpdateProfileInput) {
     await this.updateAccount(accountId, input, 'ADMIN_PROFILE_UPDATED');
     return this.getAdmin(accountId);
@@ -107,6 +129,36 @@ export class ProfileService {
         });
       });
       return this.getDriver(accountId);
+    } catch (error) {
+      this.throwAccountConflict(error);
+    }
+  }
+
+  async updateCore(accountId: string, input: UpdateProfileInput) {
+    try {
+      await this.db.transaction(async (tx) => {
+        const [account] = await tx
+          .update(authAccounts)
+          .set({
+            ...(input.username !== undefined
+              ? { username: input.username.trim().toLowerCase() }
+              : {}),
+            ...(input.displayName !== undefined ? { displayName: input.displayName.trim() } : {}),
+            ...(input.email !== undefined ? { email: input.email.trim().toLowerCase() } : {}),
+            updatedAt: new Date(),
+          })
+          .where(and(eq(authAccounts.id, accountId), inArray(authAccounts.role, coreRoles)))
+          .returning({ id: authAccounts.id });
+        if (!account) this.notFound();
+        await tx.insert(auditEvents).values({
+          actorAccountId: accountId,
+          action: 'CORE_PROFILE_UPDATED',
+          entityType: 'AUTH_ACCOUNT',
+          entityId: accountId,
+          metadata: { changedFields: Object.keys(input).sort().join(',') },
+        });
+      });
+      return this.getCore(accountId);
     } catch (error) {
       this.throwAccountConflict(error);
     }
@@ -186,7 +238,15 @@ export class ProfileService {
   }
 
   private throwAccountConflict(error: unknown): never {
-    if (isPostgresError(error, '23505')) {
+    const conflict = findPostgresError(error, '23505');
+    if (conflict?.constraint === 'auth_accounts_username_unique') {
+      throw new AppError({
+        code: 'ACCOUNT_USERNAME_ALREADY_EXISTS',
+        message: 'This username is already in use',
+        statusCode: 409,
+      });
+    }
+    if (conflict) {
       throw new AppError({
         code: 'ACCOUNT_EMAIL_ALREADY_EXISTS',
         message: 'This email address is already in use',

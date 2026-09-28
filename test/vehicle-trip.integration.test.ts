@@ -213,13 +213,23 @@ integration('vehicle and trip APIs', () => {
       method: 'POST',
       url: '/api/v1/admin/vehicles',
       headers: { cookie: adminCookie },
-      payload: { registrationNumber: `wb 01 ${suffix}`, displayName: 'Toyota Crysta' },
+      payload: {
+        registrationNumber: `wb 01 ${suffix}`,
+        displayName: 'Toyota Crysta',
+        vehicleType: 'SUV',
+        registeredOwner: 'Eastern Risen',
+      },
     });
     expect(vehicleResponse.statusCode).toBe(201);
     vehicleId = vehicleResponse.json<{ data: { id: string; registrationNumber: string } }>().data
       .id;
     expect(vehicleResponse.json()).toMatchObject({
-      data: { registrationNumber: `WB 01 ${suffix.toUpperCase()}` },
+      data: {
+        registrationNumber: `WB 01 ${suffix.toUpperCase()}`,
+        vehicleType: 'SUV',
+        registeredOwner: 'Eastern Risen',
+        accountNumber: null,
+      },
     });
 
     const vehicleUpdate = await app.inject({
@@ -539,7 +549,11 @@ integration('vehicle and trip APIs', () => {
       method: 'POST',
       url: '/api/v1/admin/vehicles',
       headers: { cookie: adminCookie },
-      payload: { registrationNumber: `wb 02 ${suffix}`, displayName: 'Backup Crysta' },
+      payload: {
+        registrationNumber: `wb 02 ${suffix}`,
+        displayName: 'Backup Crysta',
+        vehicleType: 'SUV',
+      },
     });
     expect(vehicleResponse.statusCode).toBe(201);
     businessVehicleId = vehicleResponse.json<{ data: { id: string } }>().data.id;

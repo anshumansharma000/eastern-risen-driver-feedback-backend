@@ -4,6 +4,14 @@ Fastify and TypeScript backend for the Driver Feedback Service described in
 [PRODUCT.md](PRODUCT.md). The logical persistence model is documented in
 [DATA_MODEL.md](DATA_MODEL.md).
 
+## Core API
+
+The same application now includes a modular core API under `/api/v1/core`, with a
+separate PostgreSQL schema, scoped user roles, master data, invoices, receipts and
+receivables. See [PRODUCT.md](PRODUCT.md) for the complete Core product source of
+truth. [CORE_API.md](CORE_API.md) remains a concise technical implementation guide.
+Existing feedback routes are preserved.
+
 ## Local setup
 
 Requirements:

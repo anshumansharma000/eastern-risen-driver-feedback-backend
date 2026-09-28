@@ -1,3 +1,4 @@
+import { Type } from 'typebox';
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import type { AuthService } from './auth.service.js';
 import {
@@ -16,6 +17,36 @@ export interface AuthRouteOptions {
 }
 
 export const authRoutes: FastifyPluginAsyncTypebox<AuthRouteOptions> = async (app, options) => {
+  app.post(
+    '/core/login',
+    {
+      config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
+      schema: {
+        tags: ['authentication'],
+        summary: 'Sign in a core user',
+        body: Type.Object(
+          {
+            username: Type.String({ minLength: 1, maxLength: 64 }),
+            password: Type.String({ minLength: 1, maxLength: 128 }),
+          },
+          { additionalProperties: false },
+        ),
+        response: { 200: loginResponseSchema },
+      },
+    },
+    async (request, reply) => {
+      const session = await options.authService.loginCore(
+        request.body.username,
+        request.body.password,
+      );
+      reply.setCookie(
+        options.cookieName,
+        session.token,
+        sessionCookieOptions(options.secureCookie, session.expiresAt),
+      );
+      return { data: { user: session.principal, expiresAt: session.expiresAt.toISOString() } };
+    },
+  );
   app.post(
     '/admin/login',
     {

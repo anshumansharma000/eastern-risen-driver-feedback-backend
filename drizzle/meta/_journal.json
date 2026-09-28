@@ -113,6 +113,41 @@
       "when": 1788438867881,
       "tag": "0015_dapper_logan",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1788811101600,
+      "tag": "0016_core_api",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1788863878381,
+      "tag": "0017_overconfident_king_cobra",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1788957441596,
+      "tag": "0018_invoice_audit_details",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1789069104566,
+      "tag": "0019_yielding_wallop",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1789070547365,
+      "tag": "0020_outgoing_wrecker",
+      "breakpoints": true
     }
   ]
 }

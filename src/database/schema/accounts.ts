@@ -7,6 +7,7 @@ export const authAccounts = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     role: accountRole('role').notNull(),
+    username: text('username'),
     displayName: text('display_name').notNull(),
     email: text('email').notNull(),
     passwordHash: text('password_hash').notNull(),
@@ -20,6 +21,7 @@ export const authAccounts = pgTable(
     archivedAt: timestamp('archived_at', { withTimezone: true }),
   },
   (table) => [
+    uniqueIndex('auth_accounts_username_unique').on(sql`lower(${table.username})`),
     uniqueIndex('auth_accounts_email_unique').on(sql`lower(${table.email})`),
     index('auth_accounts_status_idx').on(table.status),
     check(

@@ -8,11 +8,25 @@ import type { AccountStatus } from '../auth/auth.types.js';
 export interface CreateVehicleInput {
   readonly registrationNumber: string;
   readonly displayName: string;
+  readonly vehicleType: string;
+  readonly registeredOwner?: string | null;
+  readonly address?: string | null;
+  readonly contactNumber?: string | null;
+  readonly accountNumber?: string | null;
+  readonly ifscCode?: string | null;
+  readonly bankName?: string | null;
 }
 
 export interface UpdateVehicleInput {
   readonly registrationNumber?: string;
   readonly displayName?: string;
+  readonly vehicleType?: string;
+  readonly registeredOwner?: string | null;
+  readonly address?: string | null;
+  readonly contactNumber?: string | null;
+  readonly accountNumber?: string | null;
+  readonly ifscCode?: string | null;
+  readonly bankName?: string | null;
 }
 
 export interface ListVehiclesInput {
@@ -32,6 +46,13 @@ export class VehicleService {
           .values({
             registrationNumber: normalizeRegistration(input.registrationNumber),
             displayName: input.displayName.trim(),
+            vehicleType: input.vehicleType.trim(),
+            registeredOwner: normalizeOptional(input.registeredOwner),
+            address: normalizeOptional(input.address),
+            contactNumber: normalizeOptional(input.contactNumber),
+            accountNumber: normalizeOptional(input.accountNumber),
+            ifscCode: normalizeOptional(input.ifscCode)?.toUpperCase() ?? null,
+            bankName: normalizeOptional(input.bankName),
           })
           .returning();
         if (!vehicle) throw new Error('Vehicle insert did not return a row');
@@ -59,6 +80,23 @@ export class VehicleService {
               ? { registrationNumber: normalizeRegistration(input.registrationNumber) }
               : {}),
             ...(input.displayName !== undefined ? { displayName: input.displayName.trim() } : {}),
+            ...(input.vehicleType !== undefined ? { vehicleType: input.vehicleType.trim() } : {}),
+            ...(input.registeredOwner !== undefined
+              ? { registeredOwner: normalizeOptional(input.registeredOwner) }
+              : {}),
+            ...(input.address !== undefined ? { address: normalizeOptional(input.address) } : {}),
+            ...(input.contactNumber !== undefined
+              ? { contactNumber: normalizeOptional(input.contactNumber) }
+              : {}),
+            ...(input.accountNumber !== undefined
+              ? { accountNumber: normalizeOptional(input.accountNumber) }
+              : {}),
+            ...(input.ifscCode !== undefined
+              ? { ifscCode: normalizeOptional(input.ifscCode)?.toUpperCase() ?? null }
+              : {}),
+            ...(input.bankName !== undefined
+              ? { bankName: normalizeOptional(input.bankName) }
+              : {}),
             updatedAt: new Date(),
           })
           .where(eq(vehicles.id, id))
@@ -148,4 +186,8 @@ export class VehicleService {
 
 function normalizeRegistration(value: string): string {
   return value.trim().toUpperCase().replaceAll(/\s+/g, ' ');
+}
+
+function normalizeOptional(value: string | null | undefined): string | null {
+  return value?.trim() || null;
 }

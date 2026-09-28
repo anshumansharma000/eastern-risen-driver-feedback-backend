@@ -1,4 +1,5 @@
-export type AccountRole = 'ADMIN' | 'DRIVER';
+export type AccountRole =
+  'ADMIN' | 'DRIVER' | 'CORE_ADMIN' | 'CORE_REPORT_VIEWER' | 'CORE_DATA_ENTRY';
 export type AccountStatus = 'ACTIVE' | 'DEACTIVATED' | 'ARCHIVED';
 
 export interface AuthAccount {

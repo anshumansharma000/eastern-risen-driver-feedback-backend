@@ -136,6 +136,13 @@ function serializeVehicle(vehicle: {
   id: string;
   registrationNumber: string;
   displayName: string;
+  vehicleType: string;
+  registeredOwner: string | null;
+  address: string | null;
+  contactNumber: string | null;
+  accountNumber: string | null;
+  ifscCode: string | null;
+  bankName: string | null;
   status: 'ACTIVE' | 'DEACTIVATED' | 'ARCHIVED';
   createdAt: Date;
   updatedAt: Date;

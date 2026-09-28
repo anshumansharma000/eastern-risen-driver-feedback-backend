@@ -19,6 +19,18 @@ export const adminProfileSchema = Type.Object({
   role: Type.Literal('ADMIN'),
 });
 
+const coreRoleSchema = Type.Union([
+  Type.Literal('CORE_ADMIN'),
+  Type.Literal('CORE_REPORT_VIEWER'),
+  Type.Literal('CORE_DATA_ENTRY'),
+]);
+
+export const coreProfileSchema = Type.Object({
+  ...accountProfileFields,
+  role: coreRoleSchema,
+  username: Type.String(),
+});
+
 export const driverProfileSchema = Type.Object({
   ...accountProfileFields,
   role: Type.Literal('DRIVER'),
@@ -37,6 +49,15 @@ export const driverProfileSchema = Type.Object({
 
 export const updateAdminProfileBodySchema = Type.Object(
   {
+    displayName: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+    email: Type.Optional(Type.String({ format: 'email', maxLength: 320 })),
+  },
+  { additionalProperties: false, minProperties: 1 },
+);
+
+export const updateCoreProfileBodySchema = Type.Object(
+  {
+    username: Type.Optional(Type.String({ pattern: '^[a-zA-Z0-9_.-]{3,64}$' })),
     displayName: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
     email: Type.Optional(Type.String({ format: 'email', maxLength: 320 })),
   },

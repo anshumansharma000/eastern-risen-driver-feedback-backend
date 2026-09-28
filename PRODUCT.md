@@ -1,646 +1,966 @@
-# Driver Feedback Service — Product Source of Truth
+# Eastern Risen Core API — Product Source of Truth
 
-**Product:** Eastern Risen Driver Feedback Service  
-**Organization:** Eastern Risen Expedition Pvt. Ltd.  
-**Document status:** Authoritative product reference  
-**Initial platform:** Responsive web application  
-**Initial audience:** One travel agency  
-**Language:** English  
-**Last updated:** 2026-07-25
+**Product:** Eastern Risen Core API
 
-## 1. Purpose of this document
+**Contract version:** v1
 
-This document is the source of truth for the product. Backend behavior, API contracts, frontend requirements, analytics, exports, and acceptance criteria must be consistent with it.
+**Implementation status:** Current repository implementation
 
-The backend is developed in this repository. The frontend will live in a separate repository or folder and will consume requirements and contracts defined here. When product behavior changes, this document should be updated before or alongside the implementation.
+**Last verified:** 2026-09-08
 
-Related engineering references:
+**Owner:** Eastern Risen Core product and engineering team
 
-- [DATA_MODEL.md](DATA_MODEL.md) — authoritative logical data model derived from this product specification
+## 1. Authority and purpose
 
-The following labels are used throughout:
+This document is the canonical product specification for the Eastern Risen Core API. It defines the product boundary, users, permissions, domain language, data ownership, HTTP surface, business rules, lifecycle rules, financial calculations, operational requirements, migration behavior, and explicit non-goals.
 
-- **Required:** Confirmed behavior for the initial product.
-- **Recommended default:** A default that may be changed during implementation without altering the product's intent.
-- **TBD:** A product or implementation decision that has not yet been finalized.
+The runtime API is served under `/api/v1/core`, with the three shared session endpoints listed in this document under `/api/v1/auth`. No other API surface belongs to this specification.
 
-## 2. Product vision
+When sources disagree, resolve the discrepancy in this order:
 
-The service helps a travel agency collect structured feedback about its drivers immediately after a trip. At the end of a trip, a driver uses a phone or tablet to open a passenger-safe feedback experience and hands the device to the passenger. The passenger submits feedback, optionally participates in a reward wheel, and returns the device.
+1. This document defines intended product behavior.
+2. The generated OpenAPI document at `/docs` defines the deployed wire contract.
+3. `src/modules/core/http/*.routes.ts` and `*.schemas.ts` define route registration and validation.
+4. `src/modules/core/domain` and `src/modules/core/persistence` define implemented business behavior and storage invariants.
+5. Tests define verified examples, not new product behavior.
 
-Drivers can view only their aggregate performance. Administrators manage drivers, vendors, trips, questionnaires, rewards, feedback records, exports, and analytics.
+Any behavior change must update this document, the implementation, OpenAPI schemas, and relevant tests in the same change. If the implementation temporarily differs from this document, treat that difference as a defect or record it explicitly here as a known deviation.
 
-The experience must remain usable when connectivity is unreliable. Feedback completed offline must be stored securely on the device and submitted automatically when connectivity returns. Rewards that require the server must not be available offline.
+This is a Core-only document. It intentionally does not specify adjacent product endpoints, workflows, roles, data models, or configuration.
 
-## 3. Product goals
+## 2. Product definition
 
-1. Make post-trip feedback quick and comfortable on a shared phone or tablet.
-2. Associate every response with exactly one trip and one driver.
-3. Give administrators useful visibility into driver performance and negative feedback.
-4. Give drivers a simple, privacy-safe view of their aggregate performance.
-5. Support both agency drivers and outsourced drivers.
-6. Allow the agency to change the questionnaire without invalidating historical data.
-7. Continue collecting feedback during temporary internet outages.
-8. Optionally reward passengers without tying reward eligibility to the rating they give.
+The Core API is the operational and financial system of record for Eastern Risen's travel-services business. It enables authorized staff to:
 
-## 4. Initial scope and scale
+- maintain issuing companies and their bank accounts;
+- maintain billing customers, travellers, hotels, hotel rates, service categories, and tax rules;
+- access and maintain the shared vendor and vehicle catalog through controlled adapters;
+- store Core-specific vendor and vehicle profile data without duplicating shared catalog ownership;
+- prepare, calculate, review, issue, and cancel invoices;
+- record, confirm, and reverse invoice-linked receipts;
+- record and reverse commercial settlement discounts;
+- view live receivables and traveller activity;
+- administer Core users and access;
+- import reviewed historical invoices without applying current issuance rules;
+- preserve audit history and transactional domain events.
 
-- One travel agency; this is not a multi-tenant SaaS product in the initial release.
-- Approximately 14 agency drivers, plus outsourced drivers.
-- Approximately 1,500–2,500 feedback submissions per month.
-- Responsive web application designed for phones, tablets, and admin desktop use.
-- English only.
-- One administrator permission level. Multiple admin accounts may use that same role.
-- Hosting, production domain, email provider, and final implementation stack will be selected during implementation.
+### 2.1 Product goals
 
-## 5. Actors and permissions
+- One trusted ledger for Core invoices, receipts, adjustments, and outstanding balances.
+- Reproducible financial results using exact decimal arithmetic and immutable issued-document snapshots.
+- Safe concurrent operation for document numbering, versioned edits, and settlement.
+- Least-privilege access for administrators, data-entry operators, and report viewers.
+- Preservation of historical printed values and source identity during migration.
+- A module boundary that can later be extracted into a separately deployed service without changing the public v1 contract.
 
-### 5.1 Passenger
+### 2.2 Primary users
 
-A passenger does not sign in.
-
-The passenger can:
-
-- Review the trip context displayed on the feedback screen.
-- Enter the configured personal details.
-- Answer the active questionnaire.
-- Submit one feedback response for the trip.
-- Use the reward wheel when it is enabled and the device is online.
-- See either the awarded prize or the configured thank-you message.
-
-The passenger must not be able to:
-
-- Access driver or admin navigation.
-- View earlier feedback or another passenger's information.
-- View driver analytics or individual feedback records.
-- Change the associated driver or trip from within the passenger feedback flow.
-
-### 5.2 Driver
-
-The driver signs in with a driver ID and password.
-
-The driver can:
-
-- View trips assigned to them.
-- Select an assigned trip and start its feedback flow.
-- Enter an unassigned trip manually and start its feedback flow.
-- View their own aggregate overall score and aggregate category scores.
-- Filter their aggregate results by month.
-- Ask an administrator to reset a forgotten password.
-
-The driver must not be able to:
-
-- View individual feedback responses or written comments.
-- View passenger personal information.
-- View another driver's scores or trips.
-- Configure questionnaires or rewards.
-- Edit or delete submitted feedback.
-
-### 5.3 Administrator
-
-There is one administrator permission level.
-
-The administrator can:
-
-- Create and manage admin-accessible product data.
-- Create, edit, deactivate, archive, and restore drivers where restoration is supported.
-- Initiate a driver password reset.
-- Create and manage outsourced driver vendors.
-- Create trips and assign them to drivers.
-- Inspect submitted feedback, including written comments.
-- Flag or archive feedback while retaining its audit history.
-- Configure, reorder, activate, archive, and version questionnaires and questions.
-- Configure the optional reward wheel and its prize inventory.
-- View dashboards and analytics.
-- Export authorized report data to CSV, Excel, and PDF.
-
-The administrator must not be able to edit the contents of a submitted feedback response.
-
-## 6. Core user journeys
-
-### 6.1 Driver sign-in
-
-1. The driver enters their driver ID and password.
-2. The service validates that the driver account is active.
-3. The driver arrives at their driver home screen.
-4. The driver can select an assigned trip or create an unassigned trip.
-5. For a forgotten password, the driver contacts an administrator, who directly assigns a new password.
-
-### 6.2 Admin-assigned trip
-
-1. The administrator creates a trip with the required trip details.
-2. The administrator assigns an active driver to the trip.
-3. The trip appears in that driver's assigned trip list.
-4. At the end of the trip, the driver reviews/selects the trip and taps **Start feedback**.
-5. The application switches to the passenger-safe feedback flow.
-
-### 6.3 Driver-entered trip
-
-1. The driver chooses to enter an unassigned trip.
-2. The driver supplies all required trip fields.
-3. The trip is automatically associated with the authenticated driver.
-4. The driver confirms the details and taps **Start feedback**.
-5. The application switches to the passenger-safe feedback flow.
-
-### 6.4 Passenger feedback
-
-1. The passenger sees a welcome screen and limited, non-sensitive trip context.
-2. The passenger enters the required personal details and accepts the privacy/consent notice.
-3. The passenger answers the active questionnaire in the configured order.
-4. Required answers are validated before submission.
-5. The passenger submits the feedback.
-6. The system associates the immutable response with the trip, driver, passenger information, and a snapshot of the questionnaire.
-7. If online, the response is stored on the server immediately.
-8. If offline or submission fails because of connectivity, the response is queued securely and automatically retried when connectivity returns.
-
-### 6.5 Completion without rewards
-
-1. After a successful or safely queued submission, the passenger sees a configurable thank-you message.
-2. The application prevents access to prior responses, driver-only screens, and admin screens.
-3. The flow ends at a safe hand-back screen that requires driver authentication or an equivalent driver-only action to continue.
-
-### 6.6 Completion with the reward wheel
-
-1. The wheel is offered only when rewards are enabled and the device has a working server connection.
-2. Every passenger with a completed eligible response receives the same opportunity to spin, regardless of their answers or rating.
-3. The server selects the outcome using the configured probability and available inventory.
-4. The outcome and inventory change are recorded atomically so a coupon cannot be awarded twice.
-5. If a prize is won, its details and coupon code are emailed to the passenger.
-6. The passenger sees a result screen, followed by the safe hand-back screen.
-7. If the wheel is disabled or unavailable because the device is offline, the passenger sees the thank-you experience instead.
-
-### 6.7 Driver score review
-
-1. The authenticated driver opens their performance view.
-2. The service shows regular arithmetic aggregates based on submitted, non-archived feedback.
-3. The driver can view the overall aggregate and category aggregates.
-4. The driver can filter the aggregates by month.
-5. No individual response, comment, or passenger information is exposed.
-
-### 6.8 Admin feedback review
-
-1. The administrator opens the feedback list or dashboard.
-2. The administrator can filter and inspect feedback.
-3. Negative feedback is visibly surfaced on the dashboard.
-4. The administrator may flag or archive a response.
-5. Submitted answers remain immutable; all administrative state changes are audited.
-
-## 7. Functional requirements
-
-### 7.1 Authentication and account management
-
-- **AUTH-001 — Required:** Drivers authenticate with a unique driver ID and password.
-- **AUTH-002 — Required:** Administrators authenticate separately from drivers.
-- **AUTH-003 — Required:** Deactivated or archived users cannot sign in.
-- **AUTH-004 — Required:** Drivers with a forgotten password use the administrator-assisted reset process; no public or email reset flow is exposed.
-- **AUTH-005 — Required:** Administrators can directly set a new driver password; the reset revokes all existing driver sessions.
-- **AUTH-006 — Required:** Passenger feedback mode must not expose authenticated driver or admin pages.
-- **AUTH-007 — Required:** Authentication and password storage must follow current security best practices; plaintext passwords must never be stored.
-- **AUTH-008 — Recommended default:** Require reauthentication or a driver-only unlock action after the passenger flow ends.
-- **AUTH-009 — Required:** Administrators and drivers can read and update their
-  own basic account profile. Drivers may self-edit display name, email, and
-  phone; operational employment and assignment fields remain
-  administrator-controlled.
-- **AUTH-010 — Required:** Authenticated users can change their own password
-  after supplying the current password. Successful password changes and resets
-  revoke all existing sessions for the account.
-
-### 7.2 Driver and vendor management
-
-- **DRV-001 — Required:** Administrators can create, view, edit, deactivate, and archive drivers.
-- **DRV-002 — Required:** A driver is classified as either an agency driver or an outsourced driver.
-- **DRV-003 — Required:** An outsourced driver can be linked to a vendor/company.
-- **DRV-004 — Required:** Historical trips and feedback remain linked to archived drivers and vendors.
-- **DRV-005 — Required:** Hard deletion must not remove records required for historical reporting or auditability.
-- **DRV-006 — Required:** Driver IDs must be unique among accounts that may authenticate.
-- **DRV-007 — Required:** Administrators can open a dedicated driver detail and
-  directly assign a new password without the password being logged, persisted
-  as plaintext, or returned by the API.
-
-### 7.3 Trip management
-
-- **TRIP-001 — Required:** Administrators can create a trip and assign it to an active driver.
-- **TRIP-002 — Required:** Drivers can manually create their own unassigned trip.
-- **TRIP-003 — Required:** A driver-created trip is automatically assigned to the authenticated driver.
-- **TRIP-004 — Required:** A trip records:
-  - Booking reference
-  - Passenger name
-  - Pickup location
-  - Destination
-  - Trip date and time
-  - Vehicle
-  - Driver
-  - Driver source: agency or outsourced
-  - Vendor/company when the driver is outsourced
-  - Creation source: admin-assigned or driver-entered
-- **TRIP-005 — Required:** A trip can have at most one submitted feedback response.
-- **TRIP-006 — Required:** The system must reject accidental duplicate submissions at the server level.
-- **TRIP-007 — Required:** Archived drivers, vendors, or trips must not disappear from historical feedback and reports.
-
-### 7.4 Questionnaire management
-
-- **QUE-001 — Required:** Administrators can configure the questionnaire used for all trips and passengers.
-- **QUE-002 — Required:** Supported question types are:
-  - 1–5 star rating
-  - Emoji rating
-  - Yes/no
-  - Single or multiple choice
-  - Written response
-- **QUE-003 — Required:** Administrators can add, edit, reorder, activate, deactivate, and archive questions.
-- **QUE-004 — Required:** Each question can be marked required or optional.
-- **QUE-005 — Required:** The questionnaire supports, at minimum, overall experience, driving safety, punctuality, cleanliness, professionalism, and vehicle condition.
-- **QUE-006 — Required:** Questionnaire changes apply to future feedback flows and do not rewrite historical responses.
-- **QUE-007 — Required:** Each started/submitted response stores an immutable snapshot containing question wording, type, order, options, required status, category, and questionnaire version.
-- **QUE-008 — Required:** Only one questionnaire version is active for new feedback at a time.
-
-### 7.5 Passenger information and feedback
-
-- **FDB-001 — Required:** The service collects passenger name, phone number, email address, and booking reference.
-- **FDB-002 — Required:** The feedback flow displays an appropriate consent/privacy notice before submission.
-- **FDB-003 — Required:** Required passenger fields and questionnaire answers are validated.
-- **FDB-004 — Required:** A submitted feedback response and its answers cannot be edited.
-- **FDB-005 — Required:** An administrator can flag or archive feedback without changing its submitted content.
-- **FDB-006 — Required:** Flagging and archiving actions record the acting administrator and timestamp.
-- **FDB-007 — Required:** Feedback is associated with exactly one passenger record/context, trip, driver, and questionnaire snapshot.
-- **FDB-008 — Required:** The passenger cannot see prior responses after submission.
-- **FDB-009 — Required:** A submission receives a stable client-generated identifier so an offline retry cannot create a duplicate.
-
-### 7.6 Offline feedback submission
-
-- **OFF-001 — Required:** The passenger feedback form remains usable during temporary connectivity loss after the relevant trip and questionnaire data have been loaded.
-- **OFF-002 — Required:** A completed response that cannot reach the server is stored in a durable local queue.
-- **OFF-003 — Required:** Queued responses retry automatically when connectivity returns.
-- **OFF-004 — Required:** Retrying is idempotent and cannot create duplicate responses or duplicate rewards.
-- **OFF-005 — Required:** Queued personal information and feedback must be protected from normal access through the application UI.
-- **OFF-006 — Required:** Successfully synchronized local payloads are removed from the pending queue when safe to do so.
-- **OFF-007 — Required:** The driver/admin side must provide a way to see whether the device has pending or failed submissions.
-- **OFF-008 — Required:** Passengers do not need to be told that the response was queued because of connectivity.
-- **OFF-009 — Required:** The reward wheel is not offered while offline.
-- **OFF-010 — Required:** A queued response becomes reward-ineligible for that offline completion unless the product later defines a verified deferred-reward flow.
-
-### 7.7 Rewards and prize wheel
-
-- **RWD-001 — Required:** The administrator can enable or disable the reward wheel.
-- **RWD-002 — Required:** When disabled, the passenger sees a configurable thank-you message.
-- **RWD-003 — Required:** Reward eligibility and outcome must not depend on the passenger's rating or answers.
-- **RWD-004 — Required:** A prize supports:
-  - Prize name
-  - Coupon-code inventory
-  - Win probability or weight
-  - Total and remaining inventory
-  - Expiry date
-  - Active/inactive status
-- **RWD-005 — Required:** Expired, inactive, or out-of-stock prizes cannot be awarded.
-- **RWD-006 — Required:** A coupon code can be assigned at most once.
-- **RWD-007 — Required:** Prize selection and inventory reservation occur on the server in one atomic operation.
-- **RWD-008 — Required:** The awarded prize and coupon code are emailed to the passenger.
-- **RWD-009 — Required:** A feedback response can produce at most one reward-wheel attempt and one outcome.
-- **RWD-010 — Required:** The administrator can review reward outcomes and remaining inventory.
-- **RWD-011 — TBD:** Exact probability semantics when configured probabilities do not total 100%, including whether the remainder represents “no prize.”
-- **RWD-012 — TBD:** Email sender, message templates, retry policy, and handling of undeliverable email.
-
-### 7.8 Driver aggregates
-
-- **SCORE-001 — Required:** Scores use standard arithmetic aggregates; no recency weighting or special formula is applied.
-- **SCORE-002 — Required:** Drivers can see their overall aggregate score.
-- **SCORE-003 — Required:** Drivers can see aggregate scores for rated categories.
-- **SCORE-004 — Required:** Drivers can filter scores by month.
-- **SCORE-005 — Required:** Drivers cannot drill down to individual responses.
-- **SCORE-006 — Required:** Archived feedback is excluded from current aggregates but retained for audit/history.
-
-### 7.9 Admin dashboard and analytics
-
-- **ANL-001 — Required:** Show overall and per-driver ratings.
-- **ANL-002 — Required:** Surface negative feedback prominently.
-- **ANL-003 — Required:** Show monthly feedback metrics, including response count and rating trends.
-- **ANL-004 — Required:** Support comparison of agency drivers and outsourced drivers.
-- **ANL-005 — Required:** Support filters for date/month, driver, driver source, vendor, and rating/category where applicable.
-- **ANL-006 — Required:** Administrators can inspect the individual feedback behind dashboard metrics.
-- **ANL-007 — Required:** The administrator may configure a 1–5 inclusive
-  average-score threshold used to classify negative feedback. Until configured,
-  negative-feedback counts are unavailable rather than inferred from a
-  hard-coded rule.
-
-### 7.10 Reports and exports
-
-- **EXP-001 — Required:** Administrators can export basic reports as CSV, Excel, and PDF.
-- **EXP-002 — Required:** Exports respect active dashboard/report filters.
-- **EXP-003 — Required:** Default exports may include passenger name and booking reference.
-- **EXP-004 — Required:** Default exports exclude passenger phone number and email address.
-- **EXP-005 — Required:** Exports can include driver, vendor, trip, rating, category, response, and timestamp information appropriate to the report.
-- **EXP-006 — Required:** Archived records remain available to historical reports when an administrator explicitly includes them.
-- **EXP-007 — Recommended default:** Record export generation in an audit log because exports may contain personal information.
-
-## 8. Data model — conceptual entities
-
-This is a product-level model, not a final database schema.
-
-### 8.1 Administrator
-
-- Identifier
-- Name
-- Email
-- Authentication credentials/state
-- Active/archive state
-- Created and updated timestamps
-
-### 8.2 Driver
-
-- Identifier
-- Unique driver ID used for sign-in
-- Name
-- Email
-- Phone number, if collected operationally
-- Authentication credentials/state
-- Driver source: agency or outsourced
-- Vendor reference when outsourced
-- Active/deactivated/archived state
-- Created and updated timestamps
-
-### 8.3 Vendor
-
-- Identifier
-- Company name
-- Optional operational contact details
-- Active/archive state
-- Created and updated timestamps
-
-### 8.4 Vehicle
-
-- Identifier
-- Display name or model
-- Registration/vehicle reference
-- Active/archive state
-
-Vehicle management details are implementation-level until expanded by a future product decision.
-
-### 8.5 Trip
-
-- Identifier
-- Booking reference
-- Passenger name
-- Pickup location
-- Destination
-- Trip date and time
-- Vehicle reference or snapshot
-- Driver reference
-- Driver-source snapshot
-- Vendor reference/snapshot when applicable
-- Creation source: administrator or driver
-- Feedback state
-- Created and updated timestamps
-- Archive state
-
-### 8.6 Questionnaire
-
-- Identifier
-- Name
-- Version
-- Active/archive state
-- Ordered questions
-- Created and updated timestamps
-
-### 8.7 Question
-
-- Identifier
-- Prompt text
-- Type
-- Category
-- Ordered choice options where applicable
-- Required/optional state
-- Display order
-- Active/archive state
-
-### 8.8 Passenger feedback
-
-- Identifier
-- Client-generated idempotency identifier
-- Trip reference
-- Driver reference/snapshot
-- Passenger name
-- Passenger phone number
-- Passenger email address
-- Booking reference
-- Consent record and timestamp
-- Questionnaire snapshot/version
-- Ordered answer set
-- Aggregate/derived rating fields used for reporting
-- Submitted timestamp and synchronization metadata
-- Flag/archive state
-- Reward eligibility/outcome reference
-
-### 8.9 Prize
-
-- Identifier
-- Name
-- Probability or weight
-- Total and remaining inventory
-- Expiry date
-- Active/archive state
-- Coupon-code inventory
-- Created and updated timestamps
-
-### 8.10 Reward outcome
-
-- Identifier
-- Feedback reference
-- Prize reference/snapshot
-- Assigned coupon code
-- Outcome timestamp
-- Email-delivery state
-- Audit metadata
-
-### 8.11 Audit event
-
-- Identifier
-- Actor and actor type
-- Action
-- Entity type and identifier
-- Timestamp
-- Non-sensitive change metadata
-
-## 9. Lifecycle and immutability rules
-
-1. Submitted feedback answers are immutable.
-2. Questionnaire versions used by submitted feedback are immutable snapshots.
-3. Drivers, vendors, trips, questionnaires, questions, prizes, and feedback should be archived instead of hard-deleted when historical references exist.
-4. Deactivation controls future use; archiving removes an entity from normal operational views while preserving history.
-5. A trip accepts at most one feedback submission.
-6. One feedback submission permits at most one reward attempt.
-7. One coupon code can be assigned at most once.
-8. Administrative flag/archive/reset/export actions should be auditable.
-
-## 10. Privacy and security requirements
-
-- Passenger phone numbers and email addresses are sensitive personal information.
-- Passenger data must be collected only after displaying the agency's consent/privacy notice.
-- Passenger personal information must not be visible to drivers.
-- Default report exports exclude phone numbers and email addresses.
-- Backend authorization must enforce permissions independently of frontend visibility.
-- Data must be encrypted in transit in production.
-- Passwords must be hashed using a suitable adaptive password-hashing algorithm.
-- Administrator-assigned driver passwords must be hashed immediately and must
-  never be stored or logged as plaintext.
-- Logs, analytics telemetry, and error reports must not expose passwords, coupon codes, or unnecessary passenger information.
-- Offline payloads contain personal information and must be minimized, isolated from normal UI access, and deleted locally after confirmed synchronization.
-- Production retention periods and the wording of the consent/privacy notice are TBD and should be approved by the agency before launch.
-
-## 11. Analytics definitions
-
-Unless a later decision overrides these definitions:
-
-- **Overall driver rating:** Arithmetic mean of eligible overall-rating answers for the selected period.
-- **Category score:** Arithmetic mean of eligible numeric answers mapped to the category for the selected period.
-- **Monthly feedback count:** Number of submitted, non-archived feedback responses whose submission timestamp falls within the month.
-- **Rating trend:** Aggregate rating grouped by calendar month.
-- **Agency vs. outsourced comparison:** Equivalent metrics grouped by the driver's source snapshot stored on the trip/feedback.
-- **Negative feedback:** TBD pending confirmation of the rating threshold or classification rule.
-
-The backend must return counts alongside averages so the frontend can show sample size and avoid misleading comparisons.
-
-## 12. Frontend experience requirements
-
-### 12.1 Passenger experience
-
-- Mobile- and tablet-first.
-- Large touch targets and readable typography.
-- Minimal navigation and a short, linear flow.
-- Clear progress through the questionnaire.
-- No access to browser-visible historical feedback through application controls.
-- A clean hand-back state after completion.
-- Reward animation must not obscure the actual prize or misrepresent the server-selected outcome.
-
-### 12.2 Driver experience
-
-- Optimized for quick sign-in and end-of-trip handoff.
-- Assigned trips and manual trip entry must be easy to distinguish.
-- The transition into passenger mode must be explicit.
-- Pending offline submissions must be visible to the driver without exposing their content.
-- Aggregate scores should be simple and non-diagnostic; no individual feedback drill-down.
-
-### 12.3 Admin experience
-
-- Desktop-friendly responsive dashboard.
-- Fast access to negative feedback and monthly metrics.
-- Clear active, deactivated, and archived states.
-- Questionnaire reordering and required/optional configuration.
-- Prize inventory and coupon availability visibility.
-- Export controls that clearly state which passenger fields will be included.
-
-### 12.4 Visual direction
-
-- Modern, sleek, minimal, and trustworthy.
-- Inspired by Eastern Risen's travel and expedition identity.
-- The design may use restrained landscape, journey, route, horizon, or sunrise motifs without becoming decorative or reducing usability.
-- Exact colors, typography, logo usage, and imagery remain provisional until official brand assets are supplied.
-
-## 13. Backend-to-frontend contract principles
-
-The backend is the authority for authentication, authorization, questionnaire versions, submission state, reward outcomes, inventory, aggregates, and export permissions.
-
-Frontend requirements derived from this document should be communicated through:
-
-1. Versioned API documentation.
-2. Stable identifiers and enumerated lifecycle states.
-3. Machine-readable validation rules for questions and passenger fields.
-4. Explicit error codes for duplicate feedback, expired trips, offline retry conflicts, unavailable prizes, and authentication failures.
-5. Idempotency support for feedback submission and reward attempts.
-6. Dates and timestamps in an unambiguous API format, with localization handled at the presentation boundary.
-7. Contract tests or fixtures for key passenger, driver, admin, offline, and reward flows.
-
-## 14. Non-functional requirements
-
-### Reliability
-
-- Feedback submission must be idempotent.
-- Offline retries must tolerate app restarts and intermittent connectivity.
-- Reward assignment and coupon inventory changes must be transactional.
-- Failure to send a reward email must not award a second prize; email delivery should be retried independently.
-
-### Performance
-
-- The product should comfortably support 2,500 monthly responses with room for growth.
-- Passenger screens should load quickly on typical mobile connections.
-- Admin list and dashboard endpoints should be paginated or aggregated appropriately.
-
-### Accessibility
-
-- Core experiences should meet WCAG 2.1 AA expectations where practical.
-- The questionnaire must be usable by keyboard as well as touch.
-- Ratings and wheel outcomes must not rely on color alone.
-- Form errors must be clearly associated with their fields.
-
-### Compatibility
-
-- Support current mainstream mobile and desktop browsers selected during implementation.
-- The offline strategy must account for browser storage limitations and private/incognito behavior.
-
-### Observability and auditability
-
-- Monitor feedback synchronization failures, reward allocation failures, email failures, and export failures.
-- Preserve audit events for security- and history-sensitive administrative actions.
-
-## 15. MVP acceptance criteria
-
-The initial product is acceptable when:
-
-1. An administrator can create agency and outsourced drivers and assign vendors.
-2. An administrator can create and assign a trip.
-3. A driver can sign in and select that assigned trip.
-4. A driver can instead create a valid unassigned trip.
-5. A driver can launch a passenger-safe feedback flow.
-6. A passenger can enter personal details, consent, complete the configured questionnaire, and submit exactly once.
-7. A questionnaire can be reordered and its questions marked required or optional.
-8. Changing the active questionnaire does not change historical feedback.
-9. A response completed without connectivity is queued and later synchronized without duplication.
-10. No reward wheel is offered offline.
-11. When online and enabled, the wheel awards only an eligible, in-stock, unexpired coupon according to server-side configuration.
-12. A reward email is sent or placed into a retryable delivery state.
-13. The passenger ends on a safe thank-you/hand-back screen.
-14. A driver can view only their own aggregate and monthly scores.
-15. An administrator can inspect feedback, surface negative feedback, flag/archive feedback, and view monthly analytics.
-16. Submitted feedback cannot be edited.
-17. The administrator can export CSV, Excel, and PDF reports without phone numbers or email addresses by default.
-18. Archived records remain historically reportable.
-
-## 16. Explicitly out of scope for the initial release
-
-- Multiple agency tenants.
-- Languages other than English.
-- Native iOS or Android applications.
-- Passenger accounts.
-- Driver access to individual feedback or written comments.
-- Rating-weighted, recency-weighted, or otherwise specialized score formulas.
-- Editing submitted feedback.
-- Reward-wheel use while offline.
-- Automatic questionnaire translation.
-- Public review publishing or integration with third-party review platforms.
-- Advanced disciplinary, case-management, or feedback follow-up workflows.
-
-## 17. Open decisions
-
-These items do not block initial domain and API design unless noted otherwise:
-
-1. Final backend and frontend technology stacks.
-2. Hosting provider, production domain, deployment process, and environments.
-3. Transactional email provider and sender domain.
-4. Exact password/session policies and supported browser versions.
-5. The initial negative-feedback threshold value the agency wants to configure.
-6. Reward probability semantics, including a possible “no prize” outcome.
-7. Reward email templates, retry limits, and undeliverable-email handling.
-8. Exact data-retention period and final privacy/consent wording.
-9. Official logo, brand colors, typography, and imagery.
-10. Final vehicle-management depth beyond the trip's required vehicle field.
-11. Whether archived feedback can be restored and who can perform restoration.
-
-## 18. Change-management rule
-
-Any change that affects actors, permissions, workflows, stored data, API behavior, analytics definitions, exports, privacy, offline behavior, or rewards must update this document. Material changes should include the date and a short note in the change log below.
-
-## 19. Change log
-
-| Date | Change |
+| User | Primary outcomes |
 | --- | --- |
-| 2026-07-20 | Initial product source of truth created from product discovery discussions. |
-| 2026-07-25 | Made negative-feedback classification an optional configurable 1–5 average-score threshold; unconfigured analytics return no inferred negative count. |
-| 2026-07-25 | Added admin/driver self-service profiles, current-password changes with session revocation, admin driver detail, and direct administrator-assigned driver password resets. |
+| Core administrator | Configure legal, tax, service, banking, user, and lifecycle controls; perform exceptional actions such as cancellation and reversal. |
+| Core data-entry operator | Maintain operational masters, prepare and issue invoices, and record or confirm receipts. |
+| Core report viewer | Read Core data, invoice details, receivables, and traveller activity without changing records. |
+| Migration operator | Validate and apply normalized historical invoices through an offline operational command. |
+| API client | Integrate a trusted staff UI or internal system using the documented session, validation, idempotency, and response contracts. |
+
+## 3. Scope and explicit non-goals
+
+### 3.1 In scope now
+
+- Cookie-based Core authentication and role authorization.
+- Core user provisioning and administration.
+- Ten dedicated Core master resources.
+- Shared vendor and vehicle catalog access through ports/adapters.
+- INR invoice calculation and issuance.
+- Configured IGST, CGST, and SGST application selected by an operator.
+- Import-only preservation of legacy service tax.
+- Invoice-linked receipts and settlement discounts.
+- Current receivables and guest activity reporting.
+- Audit records and a transactional outbox.
+- Normalized historical issued-invoice import.
+
+### 3.2 Not implemented
+
+The following are not capabilities of v1 and must not be implied by a client:
+
+- automatic GST liability, tax treatment, or place-of-supply determination;
+- GST returns, statutory filing, e-invoicing, IRN, e-way bills, or compliance certification;
+- tax-inclusive pricing, alternate valuation bases, or special tax regimes;
+- multiple currencies or currency conversion;
+- mixed service categories within one invoice;
+- quotations, pro-forma invoices, purchase orders, credit notes, or debit notes;
+- invoice PDF generation, email delivery, or messaging delivery;
+- recurring invoices or automated payment collection;
+- advance payments, customer credit balances, or unallocated overpayments;
+- partial allocation of one receipt across multiple invoices;
+- refunds or bank reconciliation;
+- inventory, itinerary execution, booking operations, payroll, or general ledger accounting;
+- hard deletion of Core business records;
+- company-scoped tenancy or per-company role membership;
+- one account holding multiple roles or simultaneous module memberships;
+- public or customer self-service access;
+- outbox delivery to an event broker;
+- master-data bulk import, historical receipt import, or historical cancelled-invoice import.
+
+New work in any of these areas requires an explicit product decision, data model, permission model, migration plan, API contract, and tests.
+
+## 4. System and ownership boundaries
+
+The product currently runs as a module in one Fastify application and one PostgreSQL database. Core-owned tables live in the dedicated `core` schema.
+
+```text
+HTTP /api/v1/core
+        |
+        v
+Core HTTP and access layer
+        |
+        v
+Core application contracts
+     /      \
+    v        v
+Core domain  Core persistence (`core` schema)
+                 |
+                 +--> audit events
+                 +--> transactional outbox
+
+External ports:
+  Core identity --> shared account/session implementation
+  Shared catalog --> vendor and vehicle services
+```
+
+### 4.1 Module responsibilities
+
+| Module | Responsibility |
+| --- | --- |
+| `src/modules/core/domain` | Money arithmetic, tax selection, receipt rules, outstanding balance, date and financial-year rules. No HTTP or database dependency. |
+| `src/modules/core/application` | Transport-independent inputs and identity/catalog ports. |
+| `src/modules/core/persistence` | Core schema, repositories, transactions, locks, counters, snapshots, audit, reports, and outbox writes. |
+| `src/modules/core/http` | Route registration, TypeBox request/response schemas, role guards, public projections, and database-error translation. |
+| `src/modules/core/legacy` | Strict historical invoice interchange validation and ingestion. |
+| `src/modules/core/index.ts` | Core composition and route registration. |
+
+An architecture test prevents Core from importing other product modules or the shared application schema directly.
+
+### 4.2 Record ownership
+
+- Core exclusively owns companies, bank accounts, customers, guests, hotels, hotel rates, service categories, tax rules, Core profiles, invoices, invoice lines, applied taxes, counters, receipts, settlement adjustments, audit events, outbox events, and legacy mappings.
+- Shared identity owns accounts, password hashes, and sessions. Core accesses identity through `CoreIdentity`.
+- The shared catalog owns vendor name/contact data and vehicle registration/display data. Core accesses it through `SharedCatalog`.
+- Core vendor and vehicle profiles own only the additional fields listed in section 8.
+- External account, vendor, and vehicle IDs deliberately do not have cross-module foreign keys. Identity and catalog references are validated through adapters where the operation requires it.
+- Creating a catalog vendor or vehicle and creating its optional Core profile are two distinct operations. There is no cross-service transaction.
+
+### 4.3 Extraction contract
+
+Future service extraction must preserve `/api/v1/core` behavior. Extraction consists of moving the module and Core schema, replacing local identity/catalog adapters with authenticated clients or a shared identity provider, restricting database credentials to owned schemas, adding reliable outbox publication, and routing the existing prefix to the extracted service.
+
+## 5. HTTP contract conventions
+
+### 5.1 Base paths
+
+- Core resources: `/api/v1/core`
+- Core login and shared session actions used by Core: `/api/v1/auth`
+- Interactive OpenAPI: `/docs` in non-production environments by default
+- Readiness: `/health` is application infrastructure, not a Core business resource
+
+### 5.2 Media type and naming
+
+- Request and response bodies are JSON unless the response is HTTP 204.
+- JSON fields use `camelCase`.
+- IDs are UUID strings.
+- Calendar dates are ISO `YYYY-MM-DD` strings.
+- Timestamps are ISO date-time strings.
+- Unknown request properties are rejected on Core request bodies.
+- User-supplied identifiers in URLs must be safely encoded by clients.
+
+### 5.3 Success envelopes
+
+Single resource:
+
+```json
+{ "data": { "id": "..." } }
+```
+
+Collection:
+
+```json
+{
+  "data": [],
+  "pagination": { "page": 1, "pageSize": 25, "total": 0 }
+}
+```
+
+HTTP 204 responses have no body.
+
+### 5.4 Pagination and filtering
+
+- `page`: integer 1–1,000,000; default 1.
+- `pageSize`: integer 1–100; default 25.
+- Dedicated master lists accept optional `status`.
+- Customer lists additionally accept `category` and `q`.
+- `q` is a literal, case-insensitive substring search used for the billing customer picker.
+- Invoice, catalog, user, and report lists currently support pagination only; clients must not invent unimplemented filters or sorting parameters.
+
+### 5.5 Error envelope
+
+```json
+{
+  "error": {
+    "code": "CORE_VALIDATION_FAILED",
+    "message": "Safe user-facing message",
+    "developerMessage": "Optional technical guidance",
+    "details": {},
+    "requestId": "request-correlation-id"
+  }
+}
+```
+
+All responses include `x-request-id`; error bodies also contain `requestId`. Standard error statuses are 400, 401, 403, 404, 409, 413, 415, 422, 429, 500, and 503.
+
+Important Core error codes include:
+
+| Code | Status | Meaning |
+| --- | --- | --- |
+| `REQUEST_VALIDATION_FAILED` | 400 | Body, path, query, or header schema failed. `details.fields` may identify fields. |
+| `CORE_ACCESS_REQUIRED` | 403 | Authenticated account lacks a permitted Core role. |
+| `CORE_NOT_FOUND` / `CORE_USER_NOT_FOUND` | 404 | Requested Core resource or user does not exist. |
+| `STALE_VERSION` | 409 | Optimistic concurrency version is no longer current. |
+| `INVOICE_IMMUTABLE` | 409 | Attempted to edit a non-draft invoice. |
+| `INVALID_INVOICE_STATE` / `INVOICE_NOT_ISSUED` | 409 | Lifecycle transition is not allowed. |
+| `OVERPAYMENT` | 409 | Settlement exceeds current outstanding balance. |
+| `IDEMPOTENCY_CONFLICT` | 409 | Key was already used with different content. |
+| `TAX_RULE_OVERLAP` | 409 | Active rule periods overlap for the same component and service scope. |
+| `LAST_CORE_ADMIN` | 409 | Operation would remove the final active Core administrator. |
+| `NUMBER_SERIES_EXHAUSTED` | 409 | Six-digit document counter is exhausted. |
+| `CORE_RECORD_CONFLICT` | 409 | A unique identifier already exists. |
+| `CORE_VALIDATION_FAILED` | 422 | Business validation failed. |
+| `CORE_REFERENCE_INVALID` | 422 | Reference is missing or still in use. |
+| `CORE_CONSTRAINT_FAILED` | 422 | A Core database constraint rejected the operation. |
+| `CORE_DATABASE_ERROR` | 503 | Persistence failed without a more specific safe translation. |
+
+Clients must show the safe `message`, preserve the request ID for support, and never expose SQL, stack traces, or raw internal errors.
+
+## 6. Authentication, sessions, and authorization
+
+### 6.1 Session API
+
+| Method | Path | Access | Contract |
+| --- | --- | --- | --- |
+| POST | `/api/v1/auth/core/login` | Public; 5 attempts/minute | `{username,password}` → `{data:{user,expiresAt}}` and session cookie |
+| GET | `/api/v1/auth/me` | Authenticated | `{data:{user}}` |
+| POST | `/api/v1/auth/logout` | Any current session | Revokes session, clears cookie, returns 204 |
+
+The principal is:
+
+```json
+{
+  "accountId": "UUID",
+  "role": "CORE_ADMIN",
+  "displayName": "Core Administrator",
+  "driverId": null
+}
+```
+
+Core login uses username, not email. Usernames are case-insensitively unique and must contain 3–64 ASCII letters, digits, underscore, period, or hyphen when created or updated. Emails are globally unique. Login accepts a 1–128 character password so existing hashes can be verified; newly set passwords require 12–128 characters.
+
+### 6.2 Cookie behavior
+
+- Session tokens are opaque and stored in an HttpOnly cookie; there is no bearer/JWT contract.
+- Development: `SameSite=Lax`.
+- Production: `Secure`, `SameSite=None`, and `Partitioned`.
+- Cookie path is `/`.
+- Default idle lifetime is 72 hours, absolute lifetime 30 days, rotation interval 24 hours, and rotation grace 60 seconds; deployments may configure these values.
+- Authorized browser clients send `credentials: include` and must originate from an exact configured frontend origin.
+- Session access changes and password resets revoke the affected user's sessions.
+
+### 6.3 Roles
+
+| Role | Meaning |
+| --- | --- |
+| `CORE_ADMIN` | Full Core read/write/configuration/user access and exceptional financial actions. |
+| `CORE_DATA_ENTRY` | Operational master, catalog, draft, invoice issue, and receipt entry access. |
+| `CORE_REPORT_VIEWER` | Read-only Core access. |
+
+One account has one role. Roles are installation-wide and are not scoped to a company.
+
+### 6.4 Permission matrix
+
+| Capability | Admin | Data entry | Report viewer |
+| --- | :---: | :---: | :---: |
+| Read all Core masters, catalog records, invoices, details, and reports | Yes | Yes | Yes |
+| Create/update companies and bank accounts | Yes | No | No |
+| Create/update service categories and tax rules | Yes | No | No |
+| Create/update customers, guests, hotels, hotel rates, and Core profiles | Yes | Yes | No |
+| Create/update shared vendors and vehicles | Yes | Yes | No |
+| Change shared vendor/vehicle lifecycle status | Yes | No | No |
+| Create/update invoice drafts and issue invoices | Yes | Yes | No |
+| Create and confirm receipts | Yes | Yes | No |
+| Cancel invoices | Yes | No | No |
+| Reverse receipts | Yes | No | No |
+| Create/reverse settlement discounts | Yes | No | No |
+| Create/list/update users, change access, reset passwords | Yes | No | No |
+
+Backend authorization is authoritative; a client must also hide or disable unavailable actions.
+
+### 6.5 Administrator bootstrap
+
+```sh
+export CORE_ADMIN_USERNAME=core-admin
+export CORE_ADMIN_EMAIL=admin@example.com
+export CORE_ADMIN_DISPLAY_NAME='Core Administrator'
+read -s CORE_ADMIN_PASSWORD
+export CORE_ADMIN_PASSWORD
+npm run core:admin:create
+unset CORE_ADMIN_PASSWORD
+```
+
+Passwords use Argon2id. The last active Core administrator cannot be disabled, archived, or moved to another role.
+
+## 7. Shared value rules
+
+### 7.1 Money
+
+- API money values are decimal strings matching `^(0|[1-9][0-9]{0,11})\.[0-9]{2}$`.
+- They always contain exactly two fractional digits, have at most 12 integer digits, and are nonnegative at the shared parser boundary.
+- Business objects requiring positive values, including receipts and settlement discounts, reject `0.00`.
+- Core v1 currency is INR only.
+- The domain converts values to integer paise using `BigInt`; binary floating-point is never used for financial arithmetic.
+
+### 7.2 Tax rates
+
+- Rates are decimal strings from 0 through 100 with up to four fractional digits.
+- Tax is rounded half-up to paise for each invoice line and tax component.
+- Header totals are sums of already rounded line/component values.
+
+### 7.3 Text, dates, and nulls
+
+- Required `nonblank` fields must contain at least one non-whitespace character and are capped at 2,000 characters unless a narrower field limit is stated.
+- Optional master text accepts a string up to 4,000 characters or `null`.
+- Omitted optional fields on a create become null/default as applicable.
+- A master `PUT` is a full replacement: omitted optional fields clear to null and omitted `status` becomes `ACTIVE`.
+- Date ranges are inclusive and an end date cannot precede its start date.
+
+### 7.4 Core master metadata
+
+Every dedicated Core master returns:
+
+```text
+id, status, version, createdAt, updatedAt
+```
+
+- Status: `ACTIVE`, `INACTIVE`, or `ARCHIVED`.
+- Version starts at 1 and increments on each successful update.
+- Every `PUT` requires the version from the latest read.
+- Stale updates return HTTP 409.
+- No Core master has a DELETE endpoint.
+
+## 8. Domain model and field dictionary
+
+### 8.1 Company
+
+The legal issuing entity. Fields: `name` (required), `address`, `phone`, `mobileNumber`, `email`, `pan`, `serviceTaxNumber`, `cin`, `gstNumber`, `website`, `state`, `country`, `postalCode`, `branchOffice`, `paymentInstructions`, and `footerNotes`.
+
+Unknown address/state/country may remain null during migration, but an active company must have usable identity and supply data before new invoice issuance. Selected company data is snapshotted when an invoice is issued.
+
+### 8.2 Bank account
+
+A company-owned payment destination. Fields: `companyId`, `name`, `accountNumber` (all required), `branch`, `ifscCode`, and `swiftCode`. Account numbers are strings and must not be converted to numbers. An invoice may select zero to ten unique active accounts belonging to its company; selected values are snapshotted at issue.
+
+### 8.3 Customer
+
+The party that owes the invoice. Fields: `name`, `category` (required), `address`, `city`, `state`, `country`, `postalCode`, `phone`, `mobileNumber`, `email`, `contactPerson`, `pan`, `serviceTaxNumber`, `gstNumber`, and `market`.
+
+- Category: `AGENT`, `LEISURE`, or `CORPORATE`.
+- Market: `DOMESTIC`, `INTERNATIONAL`, or null.
+- Market classification does not select a currency.
+
+### 8.4 Guest
+
+An optional structured traveller related to an invoice. Fields: `name` (required), address/contact fields, `market`, `legacyLastServiceAvailed`, and `legacyLastAmountPaid`.
+
+`guestId` is optional on an invoice, while `guestDisplayText` is always required. This permits group or historical text without inventing individual guest records. Legacy last-service/payment fields are informational migration attributes and are never fabricated as invoices or receipts.
+
+### 8.5 Hotel
+
+A hotel master with `name` (required), address/contact fields, and optional `market`. It is reference data; v1 invoices do not directly reference a hotel ID.
+
+### 8.6 Hotel rate
+
+A named commercial hotel rate. Fields: `hotelId`, `plan`, `amount`, `currency`, `name` (required), `effectiveFrom`, and `effectiveTo`.
+
+- Plans: `APAI`, `MAPAI`, `CPAI`.
+- Currency: literal `INR`.
+- Amount is nonnegative.
+- Both dates may be null to preserve incomplete historical data; when present, the end cannot precede the start.
+- Hotel rates are reference data and are not automatically priced into an invoice.
+
+### 8.7 Service category
+
+The invoice-wide service classification. Fields: `name` and `code`, both required. `code` preserves HSN/SAC or other service classification text and must remain a string.
+
+Expected business categories include Advertisement, Air ticket, Car Service, Hotel Booking, Itinerary, MICE, Service charge, Train ticket, and Travel Service. These names are setup guidance, not an automatic seed or closed enum. No tax rate or classification code is assumed.
+
+### 8.8 Tax rule
+
+An effective-dated rate for one tax component and either one service category or all service categories.
+
+Fields: `name`, `component`, `serviceCategoryId`, `rate`, `effectiveFrom`, and `effectiveTo`.
+
+- Components: `IGST`, `CGST`, `SGST`, `SERVICE_TAX`.
+- `serviceCategoryId: null` means an all-services fallback.
+- Effective dates are inclusive.
+- Active periods may not overlap for the same component and same service scope.
+- A category-specific rule takes precedence over the all-services rule.
+- `SERVICE_TAX` is historical/import-only and cannot be selected on a new invoice.
+
+### 8.9 Shared vendor
+
+Catalog-owned fields: `name` (required, 1–200), `contactName`, `contactEmail`, and `contactPhone`. Responses add `id`, `status`, `createdAt`, `updatedAt`, and nullable `archivedAt`.
+
+Catalog status is `ACTIVE`, `DEACTIVATED`, or `ARCHIVED`; it is intentionally different from Core master status. Catalog updates do not use Core `version` concurrency.
+
+### 8.10 Core vendor profile
+
+One optional profile per external `vendorId`. Fields: `address`, `city`, `state`, `country`, `postalCode`, `mobileNumber`, and `market`. Do not copy catalog-owned name, email, general phone, or contact-person fields into this profile.
+
+### 8.11 Shared vehicle
+
+Catalog-owned fields: `registrationNumber` (required, 1–64) and `displayName` (required, 1–200), plus catalog metadata and status. Catalog updates do not use Core `version` concurrency.
+
+### 8.12 Core vehicle profile
+
+One optional profile per external `vehicleId`. Fields: `vehicleType`, `registeredOwner`, `address`, `contactNumber`, `accountNumber`, `ifscCode`, and `bankName`. Banking fields are restricted operational data and must not be logged or copied into general catalog records.
+
+### 8.13 Core user
+
+Safe API projection: `id`, `username`, `email`, `displayName`, `role`, and `status`. Password hashes and session details are never returned.
+
+### 8.14 Invoice aggregate
+
+An invoice contains the following header concepts:
+
+- references: `companyId`, `customerId`, optional `guestId`, `serviceCategoryId`;
+- display/context: `guestDisplayText`, optional `passengerCount`, `serviceProvidedAt`, `placeOfSupplyState`, `placeOfSupplyCountry`, optional `label`;
+- dates: `invoiceDate`, optional `dueDate`;
+- payment display: up to ten unique `bankAccountIds`;
+- one to 200 ordered lines;
+- calculated `subtotal`, `taxTotal`, and `grandTotal`;
+- lifecycle `status`, `version`, optional `financialYear`, optional `invoiceNumber`, issue/cancellation timestamps and reason;
+- immutable issue `snapshot`;
+- creator and creation/update timestamps.
+
+Each line has `position`, `description`, base `amount`, `taxTreatment`, `taxAmount`, `total`, and applied tax records containing component, exact rate, calculated amount, and optional rule ID.
+
+### 8.15 Receipt
+
+An invoice-linked payment record with `invoiceId`, derived `companyId`, allocated `receiptNumber`, `financialYear`, `receivedDate`, `amount`, `method`, method-specific `details`, `status`, creator/timestamps, and optional `reversalReason`.
+
+### 8.16 Settlement adjustment
+
+An explicitly authorized commercial discount against an issued invoice. Fields: `invoiceId`, `amount`, `reason`, `date`, creator/creation time, and optional reversal time/reason. It is not cash, a tax correction, a credit note, or an invoice-total mutation.
+
+## 9. Endpoint inventory
+
+All paths in this section are relative to `/api/v1/core`. `R` means any Core role, `W` means admin or data entry, and `A` means Core admin only.
+
+### 9.1 Dedicated masters
+
+Every row below exposes the same four operations: `GET /resource` (R), `GET /resource/:id` (R), `POST /resource`, and `PUT /resource/:id`.
+
+| Resource | Create/update access | Special list filters or rules |
+| --- | --- | --- |
+| `/companies` | A | `status`; issuer setup |
+| `/bank-accounts` | A | `status`; account must reference a company |
+| `/customers` | W | `status`, `category`, `q` |
+| `/guests` | W | `status` |
+| `/hotels` | W | `status` |
+| `/hotel-rates` | W | `status`; validates period |
+| `/service-categories` | A | `status` |
+| `/tax-rules` | A | `status`; validates period and overlap |
+| `/vendor-profiles` | W | `status`; one profile per external vendor |
+| `/vehicle-profiles` | W | `status`; one profile per external vehicle |
+
+`POST` returns 201. `GET` and `PUT` return 200. Updates require `version` and replace all editable fields.
+
+### 9.2 Shared catalog
+
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| GET | `/vendors` | R | Paginated vendor list |
+| GET | `/vendors/:id` | R | Vendor detail |
+| POST | `/vendors` | W | Create shared vendor |
+| PUT | `/vendors/:id` | W | Replace shared vendor fields |
+| PATCH | `/vendors/:id/status` | A | Set `ACTIVE`, `DEACTIVATED`, or `ARCHIVED` |
+| GET | `/vehicles` | R | Paginated vehicle list |
+| GET | `/vehicles/:id` | R | Vehicle detail |
+| POST | `/vehicles` | W | Create shared vehicle |
+| PUT | `/vehicles/:id` | W | Replace shared vehicle fields |
+| PATCH | `/vehicles/:id/status` | A | Set catalog lifecycle status |
+
+Core financial profiles are not embedded in catalog responses. Clients join them deliberately by ID when a screen needs both views.
+
+### 9.3 User administration
+
+All user endpoints require `CORE_ADMIN`.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/users` | Paginated safe user list |
+| POST | `/users` | Create `{username,email,displayName,password,role}`; returns 201 |
+| PUT | `/users/:id` | Replace `{username,email,displayName}` |
+| PATCH | `/users/:id/access` | Set `{role,status}` and revoke sessions |
+| POST | `/users/:id/password-reset` | Set `{password}`, revoke sessions, return 204 |
+
+### 9.4 Billing
+
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| GET | `/invoices` | R | Paginated invoice summaries |
+| GET | `/invoices/:id` | R | Full invoice, lines, taxes, receipts, adjustments, and current balance |
+| POST | `/invoices` | W | Create calculated draft; returns 201 |
+| PUT | `/invoices/:id` | W | Replace and recalculate a draft using `version` |
+| POST | `/invoices/:id/issue` | W | Issue reviewed draft using `{version}` |
+| POST | `/invoices/:id/cancel` | A | Cancel issued invoice using `{reason}` |
+| POST | `/receipts` | W | Create pending or confirmed receipt; requires `Idempotency-Key`; returns 201 |
+| POST | `/receipts/:id/confirm` | W | Confirm a pending receipt |
+| POST | `/receipts/:id/reverse` | A | Reverse using `{reason}` |
+| POST | `/settlement-adjustments` | A | Create commercial discount; requires `Idempotency-Key`; returns 201 |
+| POST | `/settlement-adjustments/:id/reverse` | A | Reverse discount using `{reason}` |
+
+There are no standalone receipt or adjustment list/detail endpoints. Their public read model is embedded in invoice detail.
+
+### 9.5 Reports
+
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| GET | `/reports/receivables` | R | Paginated issued invoices with total, received, adjusted, and due amounts |
+| GET | `/guests/:id/activity` | R | Last issued service and last confirmed payment linked to the guest, plus legacy informational values |
+
+## 10. Invoice calculation and lifecycle
+
+### 10.1 Draft request
+
+```json
+{
+  "companyId": "COMPANY_UUID",
+  "customerId": "CUSTOMER_UUID",
+  "guestId": null,
+  "guestDisplayText": "Traveller X 04",
+  "passengerCount": 4,
+  "serviceCategoryId": "SERVICE_CATEGORY_UUID",
+  "invoiceDate": "2026-08-20",
+  "dueDate": "2026-08-30",
+  "serviceProvidedAt": "ODISHA",
+  "placeOfSupplyState": "ODISHA",
+  "placeOfSupplyCountry": "INDIA",
+  "label": null,
+  "bankAccountIds": ["BANK_ACCOUNT_UUID"],
+  "lines": [
+    {
+      "description": "4 PAX / itinerary / travel dates / hotel / vehicle",
+      "amount": "81500.00",
+      "taxTreatment": "TAXABLE",
+      "taxComponents": ["IGST"]
+    }
+  ]
+}
+```
+
+The server, never the client, is authoritative for applied rates and calculated totals.
+
+### 10.2 Draft validation
+
+- `companyId`, `customerId`, and `serviceCategoryId` must reference active records.
+- Optional `guestId`, when supplied, must reference an active guest.
+- `guestDisplayText`, `serviceProvidedAt`, `placeOfSupplyState`, and `placeOfSupplyCountry` are required and nonblank for new drafts.
+- `passengerCount`, when supplied, is 1–100,000.
+- `dueDate`, when supplied, cannot precede `invoiceDate`.
+- `bankAccountIds` contains at most ten unique IDs, all active and owned by the invoice company.
+- An invoice contains 1–200 lines.
+- A taxable line must select tax components.
+- A non-taxable, exempt, or nil-rated line cannot select tax components.
+- The same component cannot appear twice on one line.
+- IGST cannot coexist with CGST or SGST on the same line.
+- CGST and SGST must be selected together.
+- SERVICE_TAX cannot be selected for a new draft.
+- Exactly one effective applicable rule must resolve for every selected component.
+
+### 10.3 Tax lookup and calculation
+
+For every taxable line/component:
+
+1. Use `invoiceDate` as the tax effective date.
+2. Find active rules whose inclusive period covers that date.
+3. Prefer a rule for the invoice's service category.
+4. If none exists, use an all-services rule with `serviceCategoryId: null`.
+5. Require exactly one applicable rule; ambiguity or absence fails validation.
+6. Calculate component tax from the line base amount and exact rule rate.
+7. Round half-up to paise for that component on that line.
+
+Then:
+
+```text
+line tax        = sum(rounded component tax amounts)
+line total      = line amount + line tax
+invoice subtotal = sum(line amounts)
+invoice taxTotal = sum(line tax amounts)
+invoice grandTotal = subtotal + taxTotal
+```
+
+At 5% IGST, `81500.00` produces `4075.00` tax and `85575.00` total.
+
+### 10.4 State machine
+
+```text
+             issue
+  DRAFT ----------------> ISSUED
+    |                       |
+    | edit/recalculate      | cancel (admin; no active settlements)
+    v                       v
+  DRAFT                  CANCELLED
+```
+
+- Drafts have no invoice number, financial year, issue timestamp, or snapshot.
+- Only drafts are editable.
+- Draft updates and issue commands require the current optimistic `version`.
+- Issue is retry-safe: retrying issue on an already issued invoice returns it.
+- Cancelled invoices cannot be reissued.
+- Cancellation requires a nonblank reason.
+- An invoice with any non-reversed receipt or settlement adjustment cannot be cancelled; reverse those records first.
+- Issued and cancelled invoice numbers are never reused.
+
+### 10.5 Issuance and numbering
+
+Issuance runs in one transaction and locks the invoice plus relevant master state. It revalidates active references and tax selection, creates the immutable snapshot, and allocates the number from a transaction-protected counter scoped to:
+
+```text
+company + Indian financial year + document kind
+```
+
+Invoice format: `I/2627/000001`. Receipt format: `R/2627/000001`. Counters are independent, begin at 1, and end at 999999. Numbering never uses `MAX(existing number) + 1`.
+
+The Indian financial year is derived from the document date: April–March. `2026-08-20` maps to `2627`; a January–March 2027 date also maps to `2627`.
+
+### 10.6 Immutable snapshot
+
+At issue, Core snapshots:
+
+- schema version;
+- complete selected company values;
+- complete customer values;
+- service category/classification;
+- selected company bank accounts in request order;
+- currency `INR`;
+- rounding policy `HALF_UP_PER_LINE_COMPONENT`;
+- tax effective date.
+
+Lines preserve component, rule ID where available, rate, and calculated amount. Later master or tax-rule changes must not alter issued output.
+
+## 11. Receipts, adjustments, and balances
+
+### 11.1 Receipt creation
+
+```json
+{
+  "invoiceId": "INVOICE_UUID",
+  "receivedDate": "2026-08-21",
+  "amount": "1000.00",
+  "method": "UPI",
+  "details": { "reference": "PAYMENT_REFERENCE" },
+  "status": "CONFIRMED"
+}
+```
+
+Receipts can only target an issued invoice and cannot exceed its locked current outstanding balance.
+
+| Method | Required details | Forbidden/unneeded details |
+| --- | --- | --- |
+| `CASH` | Empty object | All payment detail fields |
+| `CHEQUE` | `reference`, `bankName`, `instrumentDate` | `cardLastFour` |
+| `DD` | `reference`, `bankName`, `instrumentDate` | `cardLastFour` |
+| `CARD` | `reference`, four-digit `cardLastFour` | Bank/instrument fields; full card data |
+| `UPI` | `reference` | Bank/instrument/card fields |
+
+Never accept, store, or log full card numbers, security codes, PINs, or credentials.
+
+Receipt states:
+
+```text
+PENDING --confirm--> CONFIRMED --reverse(admin)--> REVERSED
+PENDING -----------------------reverse(admin)--> REVERSED
+```
+
+- Creation state is explicitly `PENDING` or `CONFIRMED`.
+- Only confirmed receipts reduce outstanding balance.
+- Confirming a confirmed receipt is idempotent.
+- A reversed receipt cannot be confirmed.
+- Reversal requires a nonblank reason.
+
+### 11.2 Idempotency
+
+Receipt and settlement-adjustment creation require `Idempotency-Key` with 8–128 ASCII letters, digits, underscores, colons, or hyphens.
+
+- The key is globally unique within that record type in the current implementation.
+- The transaction locks by key before lookup/create.
+- Same key and same normalized request returns the original record.
+- Same key and different content returns `IDEMPOTENCY_CONFLICT`.
+- Clients should generate a new unpredictable key for each user-intended creation and retain it across retries after a timeout.
+
+### 11.3 Settlement discount
+
+Creation requires `{invoiceId, amount, reason, date}` and an idempotency key.
+
+- Only a Core admin can create or reverse it.
+- The invoice must be issued.
+- Amount must be positive and cannot exceed current outstanding balance.
+- Date cannot precede invoice date.
+- Reversal requires a reason.
+- An active adjustment reduces due but does not change invoice subtotal, tax, or grand total.
+- An adjustment is recorded separately from receipts so reports never represent discount as collected cash.
+
+### 11.4 Balance model
+
+For an issued invoice:
+
+```text
+receivedAmount   = sum(CONFIRMED receipts)
+adjustmentAmount = sum(non-reversed settlement adjustments)
+dueAmount        = grandTotal - receivedAmount - adjustmentAmount
+```
+
+Payment status:
+
+- `NOT_APPLICABLE`: invoice is draft or cancelled; due is `0.00`.
+- `UNPAID`: issued, due is positive, and neither confirmed receipts nor active adjustments exist.
+- `PARTIALLY_PAID`: issued, due is positive, and some receipt/adjustment has reduced it.
+- `PAID`: issued and due is `0.00`.
+
+Invoice row locks serialize receipt creation, confirmation, and adjustment creation, preventing concurrent overpayment.
+
+## 12. Reporting read models
+
+### 12.1 Receivables
+
+`GET /reports/receivables` returns issued invoices only, with:
+
+```text
+invoiceId, invoiceNumber, companyId, customerId, invoiceDate,
+grandTotal, receivedAmount, adjustmentAmount, dueAmount
+```
+
+Amounts are calculated from current settlement states. The endpoint supports the
+date, party, category, vehicle, payment-status, ageing, due-date, search and sorting
+filters defined in OpenAPI, returns full-filter summaries, and has a CSV export.
+
+### 12.2 Financial reports and dashboard
+
+Core provides a dashboard plus invoice-register, vehicle-wise invoice, applied-tax,
+payments-received, settlement-discount, customer-statement and audit reports. Every
+metric has an explicit invoice, receipt, adjustment or event date basis. Full
+calculation, filter, sort, pagination, CSV and reconciliation requirements are in
+`CORE_REPORTS_ANALYTICS_SPEC.md`.
+
+Receivables and customer closing balances are current-state values. Historical
+as-of balances require a future immutable receipt-status history and are not
+represented by the current API.
+
+### 12.3 Guest activity
+
+`GET /guests/:id/activity` returns:
+
+- the most recent issued invoice linked through `guestId`, including number, date, and line descriptions;
+- the most recent confirmed receipt against an invoice linked to that guest;
+- the guest's separately stored `legacyLastServiceAvailed` and `legacyLastAmountPaid` values.
+
+Free-text `guestDisplayText` alone does not establish a guest relationship. Legacy summary fields are not converted into fabricated transactional history.
+
+## 13. Audit and domain events
+
+### 13.1 Audit trail
+
+Core mutations write append-only audit events containing actor ID, action, entity type, entity ID, and timestamp. Audited operations include master creation/update, draft creation/update, issue/cancellation, receipt creation/status change, settlement creation/reversal, and Core user administration.
+
+Core Admins can inspect the safe audit projection through `GET /reports/audit` and
+its CSV export. It contains actor, action, entity identity and timestamp only; it does
+not expose credentials, sensitive metadata or field-level before/after values.
+
+### 13.2 Transactional outbox
+
+The following versioned events are stored in `core.outbox` in the same transaction as the state change:
+
+- `core.invoice.issued.v1`
+- `core.invoice.cancelled.v1`
+- `core.receipt.created.v1`
+- `core.receipt.confirmed.v1`
+- `core.receipt.reversed.v1`
+
+Payloads contain identifiers rather than personal data or full financial snapshots. There is currently no publisher or consumer. A future publisher must mark `publishedAt` only after delivery acknowledgement; consumers must deduplicate by outbox event ID. Event contract changes require a new versioned event name.
+
+Settlement-adjustment events are not currently emitted.
+
+## 14. Security, privacy, and operational controls
+
+- Production database transport must require TLS.
+- Database credentials must never be exposed to clients; future deployments should restrict them to the Core-owned schema.
+- Session cookies and Set-Cookie headers are redacted from logs.
+- Password fields and configured personal fields are redacted from structured logs.
+- Core clients must additionally avoid logging invoice bodies, guest/contact data, bank details, receipt details, snapshots, and idempotency keys.
+- HTTP responses use Helmet security headers.
+- Browser-origin protection is enforced against configured exact origins.
+- Core login is rate limited to five attempts per minute.
+- Default request timeout is 30 seconds and default body limit is 1 MiB, both configurable.
+- Inputs and imported strings are data, never executable HTML or instructions.
+- Response schemas whitelist public fields; password hashes, request hashes, idempotency storage, raw legacy records, and internal audit/outbox rows are not returned.
+- Production interactive API docs are disabled by default.
+- Graceful shutdown handles SIGINT/SIGTERM and closes the HTTP server and database pool within the configured deadline.
+
+There is no current field-level encryption for Core bank or financial profile columns. Their protection depends on database encryption, access controls, backups, transport security, and restricted logging. Introducing application-level encryption requires a compatible migration and query strategy.
+
+## 15. Historical invoice migration
+
+Historical invoices must never be sent through new draft issuance because that would allocate new numbers and apply current rules.
+
+### 15.1 Commands
+
+```sh
+npm run core:invoice:import -- normalized-invoice.json --validate
+CORE_IMPORT_ACTOR_ID=CORE_ADMIN_UUID npm run core:invoice:import -- normalized-invoice.json --apply
+```
+
+The interchange contract is `src/modules/core/legacy/invoice-import.schema.ts`.
+
+### 15.2 Guarantees
+
+- `--validate` checks shape and recorded totals without connecting to PostgreSQL.
+- `--apply` requires valid existing Core master references and an active Core admin actor.
+- Apply stores the issued invoice, lines, component taxes, issue snapshot, audit record, and legacy mapping atomically.
+- Supplied invoice number, printed party/bank data, tax values, rounding, and totals are preserved.
+- No new-issue outbox event is emitted.
+- `{source, sourceTable, sourceId}` makes import retries idempotent.
+- Reusing a source key with different content is a conflict, never an overwrite.
+- Missing historical rule IDs remain null.
+- Missing historical structured supply fields may remain null.
+- Unknown issue time is represented as the start of invoice date in India with `issuanceTimeKnown: false`; reports must rely only on the historical invoice date.
+- Raw source data remains in restricted `legacy_mappings` and is not returned over HTTP.
+
+### 15.3 Required migration process
+
+1. Inspect representative source exports.
+2. Build and review customer/agent crosswalks; never merge solely by name.
+3. Create or link masters while preserving original identifiers and unknown values as null.
+4. Normalize invoices using historical printed snapshots rather than current masters.
+5. Reconcile every line and header total; do not silently recompute discrepancies.
+6. Import into staging and compare record counts, invoice numbers, totals, and printed values.
+7. Import and reconcile historical settlements through a separately approved process before treating imported invoices as the production receivables ledger.
+
+The current importer does not import masters, customer crosswalks, receipts, legacy discounts, cancelled invoices, or passwords. An imported invoice with no imported settlement appears fully outstanding.
+
+## 16. Deployment and configuration
+
+### 16.1 Runtime
+
+- Node.js 22.13 or later.
+- Fastify 5 application.
+- PostgreSQL through Drizzle ORM.
+- Core schema migration: `drizzle/0016_core_api.sql`.
+- Migration is additive and must run before deploying Core application code.
+
+### 16.2 Core-relevant configuration
+
+| Variable | Purpose / default |
+| --- | --- |
+| `DATABASE_URL` | Required PostgreSQL connection string. |
+| `DATABASE_SSL_MODE` | Must require TLS in production. |
+| `DATABASE_MAX_CONNECTIONS` | Pool maximum; default 10. |
+| `DATABASE_CONNECTION_TIMEOUT_MS` | Pool connection timeout; default 10,000. |
+| `DATABASE_IDLE_TIMEOUT_MS` | Idle connection timeout; default 30,000. |
+| `DATABASE_STATEMENT_TIMEOUT_MS` | Statement timeout; default 30,000. |
+| `SESSION_COOKIE_NAME` | Opaque cookie name; default `id`. |
+| `SESSION_IDLE_TTL_HOURS` | Default 72. |
+| `SESSION_ABSOLUTE_TTL_DAYS` | Default 30. |
+| `SESSION_ROTATION_INTERVAL_HOURS` | Default 24; must be less than idle TTL. |
+| `SESSION_ROTATION_GRACE_SECONDS` | Default 60. |
+| `FRONTEND_ORIGINS` | Required exact browser origins in production. |
+| `TRUST_PROXY_HOPS` | Trusted proxy hop count; default 0. |
+| `CONNECTION_TIMEOUT_MS` | HTTP connection timeout; default 10,000. |
+| `REQUEST_TIMEOUT_MS` | Request timeout; default 30,000. |
+| `KEEP_ALIVE_TIMEOUT_MS` | Keep-alive timeout; default 72,000. |
+| `BODY_LIMIT_BYTES` | Request body limit; default 1,048,576. |
+| `SHUTDOWN_TIMEOUT_MS` | Graceful shutdown deadline; default 10,000. |
+| `HOST` / `PORT` | Bind address `0.0.0.0`; port 3000 by default. |
+| `LOG_LEVEL` | `debug` in development, `info` in production by default. |
+
+Bootstrap command variables are listed in section 6.5. Import apply additionally requires `CORE_IMPORT_ACTOR_ID`.
+
+### 16.3 Deployment order
+
+1. Back up and verify the target database.
+2. Apply repository migrations through the deployment migration job.
+3. Provision the first Core admin through secure secret injection.
+4. Deploy the application with production TLS, origin, session, logging, and database settings.
+5. Verify health, Core login, `/auth/me`, role denial, one read endpoint, and a non-production financial workflow.
+6. Restrict or disable interactive docs in production.
+
+## 17. Verification and release gates
+
+Run the complete repository gate:
+
+```sh
+npm run check
+```
+
+This runs formatting checks, linting, TypeScript checks, tests, and the production build. Database integration tests require a disposable migrated database:
+
+```sh
+TEST_DATABASE_URL=postgresql://... npm test
+```
+
+A Core release is not complete unless it verifies, in proportion to the change:
+
+- role isolation and unauthorized access;
+- request/response schema and safe error envelopes;
+- optimistic concurrency and full-replacement semantics;
+- tax precedence, missing/ambiguous rates, incompatible components, and rounding;
+- invoice state transitions, numbering concurrency, and snapshot immutability;
+- receipt method validation, idempotency, concurrency, overpayment prevention, confirmation, and reversal;
+- settlement creation/reversal and balance calculation;
+- user access changes, last-admin protection, password hashing, and session revocation;
+- audit/outbox atomicity where applicable;
+- historical import validation, preservation, reconciliation, and retry behavior;
+- no dependency from the Core module into non-Core product modules.
+
+Tests must use a disposable database and must never mutate production.
+
+## 18. Product invariants
+
+These statements are non-negotiable unless this specification is deliberately revised:
+
+1. The server is authoritative for all financial calculations.
+2. Money is never calculated with binary floating point.
+3. An issued invoice is immutable and reproducible from its snapshot and line taxes.
+4. Document numbers are unique within company, financial year, and kind; cancelled numbers are not reused.
+5. No settlement may reduce an invoice below zero outstanding.
+6. Cash receipts and commercial discounts remain distinct records and reporting amounts.
+7. Historical invoices preserve historical printed values and never use current issuance behavior.
+8. Core roles grant only Core capabilities.
+9. All Core mutations require authenticated, authorized actors and are auditable.
+10. Clients cannot directly access Core persistence or provide calculated totals as authority.
+11. Master records are lifecycle-managed, versioned, and never hard-deleted through v1.
+12. Shared catalog ownership is not duplicated in Core profiles.
+13. Unsupported accounting, tax, compliance, delivery, and tenancy behavior must not be simulated by clients.
+
+## 19. Change-control checklist
+
+Every Core product change must answer and document:
+
+- Which user and outcome does it serve?
+- Is it Core-owned or an external-port responsibility?
+- What role can read and mutate it?
+- What are its validation, lifecycle, concurrency, idempotency, and deletion semantics?
+- Does it affect money, tax, numbering, balances, snapshots, or historical reproducibility?
+- What audit action and versioned domain event, if any, are required?
+- Does it expose personal, banking, credential, or financial data?
+- What migration/backfill and rollback strategy is required?
+- What OpenAPI and client compatibility impact does it have?
+- Which unit, integration, concurrency, authorization, and migration tests prove it?
+- Has this document been updated in the same change?

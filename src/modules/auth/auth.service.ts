@@ -23,6 +23,12 @@ export class AuthService {
     this.now = options.now ?? (() => new Date());
   }
 
+  async loginCore(username: string, password: string): Promise<AuthenticatedSession> {
+    return this.authenticate(
+      await this.repository.findCoreByUsername(username.trim().toLowerCase()),
+      password,
+    );
+  }
   async loginAdmin(email: string, password: string): Promise<AuthenticatedSession> {
     const account = await this.repository.findAdminByEmail(email.trim().toLowerCase());
     return this.authenticate(account, password);

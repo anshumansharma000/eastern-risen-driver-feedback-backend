@@ -1,3 +1,4 @@
+import { coreRoutes } from './modules/core/index.js';
 import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
@@ -20,7 +21,11 @@ import {
 import { adminFeedbackRoutes } from './modules/feedback/admin-feedback.routes.js';
 import { feedbackRoutes } from './modules/feedback/feedback.routes.js';
 import { healthRoutes } from './modules/health/health.routes.js';
-import { adminProfileRoutes, driverProfileRoutes } from './modules/profiles/profile.routes.js';
+import {
+  adminProfileRoutes,
+  coreProfileRoutes,
+  driverProfileRoutes,
+} from './modules/profiles/profile.routes.js';
 import {
   consentRoutes,
   questionnaireRoutes,
@@ -68,12 +73,21 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(swagger, {
     openapi: {
       info: {
-        title: 'Eastern Risen Driver Feedback API',
-        description: 'Backend contract for passenger, driver, and administrator experiences.',
+        title: 'Eastern Risen API',
+        description:
+          'Modular backend for core operations and passenger, driver, and feedback administration.',
         version: '0.1.0',
       },
       servers: [{ url: '/api/v1', description: 'Version 1 API' }],
       tags: [
+        {
+          name: 'core masters',
+          description: 'Core-owned company, customer, guest, hotel and tax configuration',
+        },
+        { name: 'core users', description: 'Scoped core account administration' },
+        { name: 'core billing', description: 'Invoices, receipts and settlement adjustments' },
+        { name: 'core reports', description: 'Receivables and guest activity' },
+        { name: 'core shared catalog', description: 'Shared vendor and vehicle catalog adapters' },
         { name: 'health', description: 'Service health and readiness' },
         { name: 'authentication', description: 'Administrator and driver sessions' },
         { name: 'drivers', description: 'Administrator-managed driver accounts' },
@@ -119,6 +133,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   });
 
   if (options.services) {
+    await app.register(coreRoutes, { prefix: '/api/v1/core', services: options.services.core });
     await app.register(authRoutes, {
       prefix: '/api/v1/auth',
       authService: options.services.authService,
@@ -206,6 +221,13 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     });
     await app.register(adminProfileRoutes, {
       prefix: '/api/v1/admin/profile',
+      guards: options.services.guards,
+      profileService: options.services.profileService,
+      cookieName: options.services.cookieName,
+      secureCookie: options.services.secureCookie,
+    });
+    await app.register(coreProfileRoutes, {
+      prefix: '/api/v1/core/profile',
       guards: options.services.guards,
       profileService: options.services.profileService,
       cookieName: options.services.cookieName,

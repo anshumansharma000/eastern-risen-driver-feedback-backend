@@ -1,3 +1,6 @@
+import { createSharedCatalogAdapter } from './shared/catalog/core-catalog.adapter.js';
+import { createCoreServices, type CoreServices } from './modules/core/index.js';
+import { CoreIdentityAdapter } from './modules/auth/core-identity.adapter.js';
 import type { AppConfig } from './config/env.js';
 import type { AppDatabase } from './database/client.js';
 import { AnalyticsService } from './modules/analytics/analytics.service.js';
@@ -20,6 +23,7 @@ import { createFieldEncryptor } from './shared/security/field-encryption.js';
 import { DisabledPhotoStorage, R2PhotoStorage } from './shared/storage/photo-storage.js';
 
 export interface ApplicationServices {
+  readonly core: CoreServices;
   readonly authService: AuthService;
   readonly bookingService: BookingService;
   readonly profileService: ProfileService;
@@ -61,21 +65,31 @@ export function createApplicationServices(db: AppDatabase, config: AppConfig): A
     config.passengerFeedbackUrl,
     photoStorage,
   );
+  const guards = createAuthGuards(authService, config.sessionCookieName, secureCookie);
+  const vendorService = new VendorService(db);
+  const vehicleService = new VehicleService(db);
+  const core = createCoreServices(
+    db,
+    new CoreIdentityAdapter(db, passwordHasher),
+    createSharedCatalogAdapter(db, vendorService, vehicleService),
+    guards.authenticated,
+  );
   return {
+    core,
     analyticsService: new AnalyticsService(db, settingsService),
     adminFeedbackService: new AdminFeedbackService(db, encryptor, settingsService, photoStorage),
     authService,
     bookingService: new BookingService(db, encryptor),
     profileService: new ProfileService(db, passwordHasher),
-    guards: createAuthGuards(authService, config.sessionCookieName, secureCookie),
+    guards,
     driverService: new DriverService(db, passwordHasher),
     engagementService,
     feedbackService,
     questionnaireService,
     settingsService,
     tripService,
-    vehicleService: new VehicleService(db),
-    vendorService: new VendorService(db),
+    vehicleService,
+    vendorService,
     cookieName: config.sessionCookieName,
     secureCookie,
   };
