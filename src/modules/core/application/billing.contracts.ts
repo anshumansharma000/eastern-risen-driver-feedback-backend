@@ -37,7 +37,7 @@ export interface InvoiceSnapshot {
   >;
   [key: string]: unknown;
 }
-export type PaymentMethod = 'CASH' | 'CHEQUE' | 'DD' | 'CARD' | 'UPI';
+export type PaymentMethod = 'CASH' | 'CHEQUE' | 'DD' | 'CARD' | 'UPI' | 'GATEWAY';
 export interface PaymentDetails {
   reference?: string;
   bankName?: string;

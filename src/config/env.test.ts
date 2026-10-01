@@ -174,6 +174,27 @@ describe('loadConfig', () => {
   });
 });
 
+describe('Cashfree configuration', () => {
+  it('requires a complete credential set and parses the optional webhook URL', () => {
+    expect(() =>
+      loadConfig({ DATABASE_URL: 'postgresql://localhost/test', CASHFREE_APP_ID: 'app' }),
+    ).toThrow('must be configured together');
+    const config = loadConfig({
+      DATABASE_URL: 'postgresql://localhost/test',
+      CASHFREE_ENV: 'sandbox',
+      CASHFREE_APP_ID: 'app',
+      CASHFREE_SECRET_KEY: 'secret',
+      CASHFREE_WEBHOOK_URL: 'https://api.example.com/api/v1/core/payments/webhooks/cashfree',
+    });
+    expect(config.cashfree).toEqual({
+      environment: 'sandbox',
+      appId: 'app',
+      secretKey: 'secret',
+      webhookUrl: 'https://api.example.com/api/v1/core/payments/webhooks/cashfree',
+    });
+  });
+});
+
 const productionR2Environment = {
   R2_ACCOUNT_ID: 'account-id',
   R2_BUCKET_NAME: 'easternrisen',

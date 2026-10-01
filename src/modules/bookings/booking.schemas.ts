@@ -14,6 +14,7 @@ export const bookingStatusSchema = Type.Union([
 
 const bookingFields = {
   bookingReference: Type.String({ minLength: 1, maxLength: 100 }),
+  commercialBookingId: Type.Union([Type.String({ format: 'uuid' }), Type.Null()]),
   tourName: Type.Union([Type.String({ maxLength: 200 }), Type.Null()]),
   fileNumber: Type.Union([Type.String({ maxLength: 100 }), Type.Null()]),
   passengerName: Type.String({ minLength: 1, maxLength: 200 }),
@@ -26,6 +27,7 @@ const bookingFields = {
 export const createBookingBodySchema = Type.Object(
   {
     bookingReference: bookingFields.bookingReference,
+    commercialBookingId: Type.Optional(bookingFields.commercialBookingId),
     tourName: Type.Optional(bookingFields.tourName),
     fileNumber: Type.Optional(bookingFields.fileNumber),
     passengerName: bookingFields.passengerName,
@@ -40,6 +42,7 @@ export const createBookingBodySchema = Type.Object(
 export const updateBookingBodySchema = Type.Object(
   {
     bookingReference: Type.Optional(bookingFields.bookingReference),
+    commercialBookingId: Type.Optional(bookingFields.commercialBookingId),
     tourName: Type.Optional(bookingFields.tourName),
     fileNumber: Type.Optional(bookingFields.fileNumber),
     passengerName: Type.Optional(bookingFields.passengerName),
@@ -63,6 +66,7 @@ export const bookingListQuerySchema = Type.Object({
 export const bookingSchema = Type.Object({
   id: Type.String({ format: 'uuid' }),
   bookingReference: Type.String(),
+  commercialBookingId: bookingFields.commercialBookingId,
   tourName: Type.Union([Type.String(), Type.Null()]),
   fileNumber: Type.Union([Type.String(), Type.Null()]),
   passengerName: Type.String(),

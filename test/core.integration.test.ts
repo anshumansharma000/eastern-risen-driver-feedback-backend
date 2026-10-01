@@ -4,7 +4,9 @@ import type { FastifyInstance, InjectOptions } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config/env.js';
-import { createApplicationServices } from '../src/container.js';
+import { createApplicationServices, type ApplicationServices } from '../src/container.js';
+import { CommercialService } from '../src/modules/core/application/commercial.service.js';
+import type { PaymentProvider } from '../src/modules/core/application/payment-provider.js';
 import { createDatabaseClient, type DatabaseClient } from '../src/database/client.js';
 import { authAccounts } from '../src/database/schema/accounts.js';
 import { passwordHasher } from '../src/modules/auth/password.js';
@@ -37,7 +39,7 @@ interface TestEnvelope {
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? describe : describe.skip;
 integration('core modular API', () => {
-  let app: FastifyInstance, database: DatabaseClient;
+  let app: FastifyInstance, database: DatabaseClient, services: ApplicationServices;
   let adminCookie: string, viewerCookie: string, operatorCookie: string, feedbackCookie: string;
   let companyId: string,
     customerId: string,
@@ -137,11 +139,12 @@ integration('core modular API', () => {
         passwordHash,
       },
     ]);
+    services = createApplicationServices(
+      database.db,
+      loadConfig({ NODE_ENV: 'test', DATABASE_URL: databaseUrl, DATABASE_SSL_MODE: 'disable' }),
+    );
     app = await buildApp({
-      services: createApplicationServices(
-        database.db,
-        loadConfig({ NODE_ENV: 'test', DATABASE_URL: databaseUrl, DATABASE_SSL_MODE: 'disable' }),
-      ),
+      services,
       exposeDocs: false,
     });
     async function login(user: string) {
@@ -221,6 +224,43 @@ integration('core modular API', () => {
       })
     ).id;
   }, 30000);
+  it.each([
+    ['core', 'CORE_ADMIN'],
+    ['viewer', 'CORE_REPORT_VIEWER'],
+    ['operator', 'CORE_DATA_ENTRY'],
+  ])('signs in a %s account by email', async (prefix, role) => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/core/login',
+      remoteAddress: `email-login-${prefix}`,
+      payload: {
+        username: ` ${prefix.toUpperCase()}-${suffix.toUpperCase()}@EXAMPLE.COM `,
+        password,
+      },
+    });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json<{ data: { user: { role: string } } }>().data.user.role).toBe(role);
+    expect(response.headers['set-cookie']).toBeDefined();
+  });
+
+  it('rejects feedback accounts and incorrect passwords on core email login', async () => {
+    for (const credentials of [
+      { username: `feedback-${suffix}@example.com`, password },
+      { username: `${username}@example.com`, password: 'incorrect-password' },
+      { username: `missing-${suffix}@example.com`, password },
+    ]) {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/core/login',
+        remoteAddress: 'email-login-invalid',
+        payload: credentials,
+      });
+      expect(response.statusCode, response.body).toBe(401);
+      expect(response.json<TestEnvelope>().error.code).toBe('AUTHENTICATION_FAILED');
+      expect(response.headers['set-cookie']).toBeUndefined();
+    }
+  });
+
   afterAll(async () => {
     await app?.close();
     await database?.close();
@@ -915,5 +955,127 @@ integration('core modular API', () => {
         })
       ).statusCode,
     ).toBe(204);
+  });
+  it('takes an accepted commercial quote through invoice, instalment and one verified receipt', async () => {
+    const travelDate = new Date(Date.now() + 90 * 86400000).toISOString().slice(0, 10);
+    const payer = await create('/customers', {
+      name: 'Commercial Test Payer',
+      category: 'LEISURE',
+      mobileNumber: '9876543210',
+      state: 'ODISHA',
+      country: 'INDIA',
+    });
+    const bookingResponse = await call('POST', '/commercial-bookings', {
+      reference: `CB-${suffix}`,
+      companyId,
+      customerId: payer.id,
+      serviceCategoryId: categoryId,
+      title: 'Private Odisha Tour',
+      serviceStartsOn: travelDate,
+    });
+    expect(bookingResponse.statusCode, bookingResponse.body).toBe(201);
+    const created = bookingResponse.json<{
+      data: { booking: { id: string }; accessToken: string };
+    }>().data;
+    const quoted = await call('POST', `/commercial-bookings/${created.booking.id}/quotes`, {
+      description: 'Private Odisha itinerary',
+      inclusions: 'Hotels and guide',
+      exclusions: 'Flights',
+      terms: 'Payment terms and cancellation policy',
+      total: '1070.00',
+    });
+    expect(quoted.statusCode, quoted.body).toBe(201);
+    const accepted = await call('POST', `/public/bookings/${created.accessToken}/accept`);
+    expect(accepted.statusCode, accepted.body).toBe(200);
+    const invoiceDraft = await create('/invoices', { ...draft('1000.00'), customerId: payer.id });
+    const issue = await call('POST', `/invoices/${invoiceDraft.id}/issue`, {
+      version: invoiceDraft.version,
+    });
+    expect(issue.statusCode, issue.body).toBe(200);
+    const invoiceNumber = issue.json<TestEnvelope>().data.invoiceNumber;
+    const available = await call(
+      'GET',
+      `/commercial-bookings/${created.booking.id}/available-invoices?q=${encodeURIComponent(invoiceNumber)}`,
+    );
+    expect(available.statusCode, available.body).toBe(200);
+    expect(available.json<{ data: Array<{ id: string; invoiceNumber: string }> }>().data).toEqual([
+      expect.objectContaining({ id: invoiceDraft.id, invoiceNumber }),
+    ]);
+    for (const search of ['Commercial Test Payer', 'Traveller X 04', 'August itinerary', '4 PAX']) {
+      const result = await call(
+        'GET',
+        `/commercial-bookings/${created.booking.id}/available-invoices?q=${encodeURIComponent(search)}`,
+      );
+      expect(result.statusCode, result.body).toBe(200);
+      expect(result.json<{ data: Array<{ id: string }> }>().data).toEqual([
+        expect.objectContaining({ id: invoiceDraft.id }),
+      ]);
+      if (search === '4 PAX') {
+        expect(
+          result.json<{ data: Array<{ lineDescription: string }> }>().data[0]?.lineDescription,
+        ).toContain('4 PAX');
+      }
+    }
+    const wrongDraft = await create('/invoices', { ...draft('900.00'), customerId: payer.id });
+    const wrongIssue = await call('POST', `/invoices/${wrongDraft.id}/issue`, {
+      version: wrongDraft.version,
+    });
+    expect(wrongIssue.statusCode, wrongIssue.body).toBe(200);
+    const wrongNumber = wrongIssue.json<TestEnvelope>().data.invoiceNumber;
+    const wrongSearch = await call(
+      'GET',
+      `/commercial-bookings/${created.booking.id}/available-invoices?q=${encodeURIComponent(wrongNumber)}`,
+    );
+    expect(wrongSearch.statusCode, wrongSearch.body).toBe(200);
+    expect(
+      wrongSearch.json<{ data: Array<{ eligible: boolean; unavailableReasons: string[] }> }>()
+        .data[0],
+    ).toMatchObject({
+      eligible: false,
+      unavailableReasons: ['Invoice grand total does not match accepted quote'],
+    });
+    const linked = await call('POST', `/commercial-bookings/${created.booking.id}/invoice`, {
+      invoiceNumber,
+    });
+    expect(linked.statusCode, linked.body).toBe(200);
+    const afterLink = await call(
+      'GET',
+      `/commercial-bookings/${created.booking.id}/available-invoices?q=${encodeURIComponent(invoiceNumber)}`,
+    );
+    const linkedResult = afterLink
+      .json<{ data: Array<{ id: string; eligible: boolean; unavailableReasons: string[] }> }>()
+      .data.find((item) => item.id === invoiceDraft.id);
+    expect(linkedResult?.eligible).toBe(false);
+    expect(linkedResult?.unavailableReasons).toContain('Booking already has an invoice');
+    const scheduled = await call('POST', `/commercial-bookings/${created.booking.id}/schedule`, {});
+    expect(scheduled.statusCode, scheduled.body).toBe(201);
+    const milestones = scheduled.json<{ data: Array<{ id: string; amount: string }> }>().data;
+    expect(milestones.map((item) => item.amount)).toEqual(['321.00', '749.00']);
+    let requestedAmount = '';
+    const provider: PaymentProvider = {
+      name: 'cashfree',
+      createOrder: async (input) => {
+        requestedAmount = input.amount;
+        return { sessionId: 'sandbox-session' };
+      },
+      successfulPayment: async () => ({
+        paymentId: `payment-${suffix}`,
+        amount: requestedAmount,
+        currency: 'INR',
+        receivedAt: `${new Date().toISOString().slice(0, 10)}T12:00:00+05:30`,
+      }),
+      verifyWebhook: () => true,
+    };
+    const commercial = new CommercialService(database.db, services.core.billing, provider);
+    const checkout = await commercial.checkout(created.accessToken, milestones[0]!.id);
+    expect(checkout).toMatchObject({ amount: '321.00', sessionId: 'sandbox-session' });
+    const payment = await commercial.reconcile(checkout.orderId);
+    expect(payment.status).toBe('PAID');
+    expect(await commercial.reconcile(checkout.orderId)).toEqual(payment);
+    const detail = await commercial.publicDetail(created.accessToken);
+    expect(detail.invoice?.received).toBe('321.00');
+    expect(detail.invoice?.due).toBe('749.00');
+    expect(detail.payments).toHaveLength(1);
+    expect(detail.milestones[0]?.paid).toBe(true);
   });
 });

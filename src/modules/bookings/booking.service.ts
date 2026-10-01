@@ -1,5 +1,6 @@
 import { and, count, desc, eq, ne, sql, type SQL } from 'drizzle-orm';
 import type { AppDatabase } from '../../database/client.js';
+import { commercialBookings } from '../core/persistence/commercial.schema.js';
 import {
   auditEvents,
   bookingDriverEngagements,
@@ -14,6 +15,7 @@ export type BookingStatus = 'ACTIVE' | 'COMPLETED' | 'CANCELLED' | 'ARCHIVED';
 
 export interface CreateBookingInput {
   readonly bookingReference: string;
+  readonly commercialBookingId?: string | null;
   readonly tourName?: string | null;
   readonly fileNumber?: string | null;
   readonly passengerName: string;
@@ -25,6 +27,7 @@ export interface CreateBookingInput {
 
 export interface UpdateBookingInput {
   readonly bookingReference?: string;
+  readonly commercialBookingId?: string | null;
   readonly tourName?: string | null;
   readonly fileNumber?: string | null;
   readonly passengerName?: string;
@@ -38,6 +41,7 @@ export interface UpdateBookingInput {
 const bookingSelection = {
   id: bookings.id,
   bookingReference: bookings.bookingReference,
+  commercialBookingId: bookings.commercialBookingId,
   tourName: bookings.tourName,
   fileNumber: bookings.fileNumber,
   passengerName: bookings.passengerName,
@@ -67,11 +71,14 @@ export class BookingService {
 
   async create(input: CreateBookingInput, actorAccountId: string) {
     const period = validatePeriod(input.startsAt, input.endsAt);
+    if (input.commercialBookingId)
+      await this.requireConfirmedCommercialBooking(input.commercialBookingId);
     try {
       const [booking] = await this.db
         .insert(bookings)
         .values({
           bookingReference: input.bookingReference.trim(),
+          commercialBookingId: input.commercialBookingId ?? null,
           tourName: normalizeOptionalText(input.tourName),
           fileNumber: normalizeOptionalText(input.fileNumber),
           passengerName: input.passengerName.trim(),
@@ -97,6 +104,8 @@ export class BookingService {
   async update(id: string, input: UpdateBookingInput, actorAccountId: string) {
     const current = await this.get(id);
     if (current.status === 'ARCHIVED') notEditable();
+    if (input.commercialBookingId)
+      await this.requireConfirmedCommercialBooking(input.commercialBookingId);
     const period = validatePeriod(
       input.startsAt ?? current.startsAt.toISOString(),
       input.endsAt ?? current.endsAt.toISOString(),
@@ -126,6 +135,9 @@ export class BookingService {
         .set({
           ...(input.bookingReference !== undefined
             ? { bookingReference: input.bookingReference.trim() }
+            : {}),
+          ...(input.commercialBookingId !== undefined
+            ? { commercialBookingId: input.commercialBookingId }
             : {}),
           ...(input.tourName !== undefined
             ? { tourName: normalizeOptionalText(input.tourName) }
@@ -227,6 +239,20 @@ export class BookingService {
         ? this.encryptor.decrypt(passengerPhoneCiphertext)
         : null,
     };
+  }
+
+  private async requireConfirmedCommercialBooking(id: string) {
+    const [booking] = await this.db
+      .select({ status: commercialBookings.status })
+      .from(commercialBookings)
+      .where(eq(commercialBookings.id, id));
+    if (!booking || booking.status !== 'CONFIRMED') {
+      throw new AppError({
+        code: 'COMMERCIAL_BOOKING_NOT_CONFIRMED',
+        message: 'A linked commercial booking must be confirmed',
+        statusCode: 409,
+      });
+    }
   }
 
   private async validateTourFeedbackConfiguration(bookingId: string) {

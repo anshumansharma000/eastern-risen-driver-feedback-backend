@@ -18,11 +18,13 @@ export function validateReceipt(input: ReceiptInput): void {
   const allowed =
     method === 'CASH'
       ? []
-      : method === 'CARD'
-        ? ['reference', 'cardLastFour']
-        : method === 'UPI'
-          ? ['reference']
-          : ['reference', 'bankName', 'instrumentDate'];
+      : method === 'GATEWAY'
+        ? ['reference']
+        : method === 'CARD'
+          ? ['reference', 'cardLastFour']
+          : method === 'UPI'
+            ? ['reference']
+            : ['reference', 'bankName', 'instrumentDate'];
   if (Object.keys(details).some((key) => !allowed.includes(key)))
     throw invalid('Payment details do not match the selected method');
 }

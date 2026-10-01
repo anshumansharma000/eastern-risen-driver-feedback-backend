@@ -148,6 +148,13 @@
       "when": 1789070547365,
       "tag": "0020_outgoing_wrecker",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1790599668409,
+      "tag": "0021_slippery_sandman",
+      "breakpoints": true
     }
   ]
 }

@@ -4,7 +4,7 @@ import { authAccounts, authSessions, drivers } from '../../database/schema/index
 import type { AuthAccount, ResolvedAuthSession } from './auth.types.js';
 
 export interface AuthRepository {
-  findCoreByUsername(username: string): Promise<AuthAccount | null>;
+  findCoreByUsernameOrEmail(identifier: string): Promise<AuthAccount | null>;
   findAdminByEmail(email: string): Promise<AuthAccount | null>;
   findDriverByCode(driverCode: string): Promise<AuthAccount | null>;
   createSession(
@@ -39,7 +39,7 @@ const accountSelection = {
 export class DrizzleAuthRepository implements AuthRepository {
   constructor(private readonly db: AppDatabase) {}
 
-  async findCoreByUsername(username: string): Promise<AuthAccount | null> {
+  async findCoreByUsernameOrEmail(identifier: string): Promise<AuthAccount | null> {
     const [account] = await this.db
       .select(accountSelection)
       .from(authAccounts)
@@ -47,7 +47,10 @@ export class DrizzleAuthRepository implements AuthRepository {
       .where(
         and(
           inArray(authAccounts.role, ['CORE_ADMIN', 'CORE_REPORT_VIEWER', 'CORE_DATA_ENTRY']),
-          eq(sql`lower(${authAccounts.username})`, username.toLowerCase()),
+          or(
+            eq(sql`lower(${authAccounts.username})`, identifier.toLowerCase()),
+            eq(sql`lower(${authAccounts.email})`, identifier.toLowerCase()),
+          ),
         ),
       )
       .limit(1);

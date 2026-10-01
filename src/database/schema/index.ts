@@ -12,3 +12,4 @@ export * from './vehicles.js';
 export * from './vendors.js';
 export * from '../../modules/core/persistence/masters.schema.js';
 export * from '../../modules/core/persistence/billing.schema.js';
+export * from '../../modules/core/persistence/commercial.schema.js';

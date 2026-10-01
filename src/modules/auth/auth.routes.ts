@@ -26,7 +26,11 @@ export const authRoutes: FastifyPluginAsyncTypebox<AuthRouteOptions> = async (ap
         summary: 'Sign in a core user',
         body: Type.Object(
           {
-            username: Type.String({ minLength: 1, maxLength: 64 }),
+            username: Type.String({
+              minLength: 1,
+              maxLength: 320,
+              description: 'Core account username or email address',
+            }),
             password: Type.String({ minLength: 1, maxLength: 128 }),
           },
           { additionalProperties: false },

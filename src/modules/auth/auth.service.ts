@@ -23,9 +23,9 @@ export class AuthService {
     this.now = options.now ?? (() => new Date());
   }
 
-  async loginCore(username: string, password: string): Promise<AuthenticatedSession> {
+  async loginCore(identifier: string, password: string): Promise<AuthenticatedSession> {
     return this.authenticate(
-      await this.repository.findCoreByUsername(username.trim().toLowerCase()),
+      await this.repository.findCoreByUsernameOrEmail(identifier.trim().toLowerCase()),
       password,
     );
   }

@@ -1,5 +1,6 @@
 export const loggerRedaction = {
   paths: [
+    'req.url',
     'req.headers.authorization',
     'req.headers.cookie',
     'req.body.password',

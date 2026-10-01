@@ -17,6 +17,12 @@ export interface R2Config {
 }
 
 export interface AppConfig {
+  readonly cashfree: {
+    environment: 'sandbox' | 'production';
+    appId: string;
+    secretKey: string;
+    webhookUrl: string | null;
+  } | null;
   readonly nodeEnv: NodeEnvironment;
   readonly host: string;
   readonly port: number;
@@ -115,8 +121,40 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     throw new Error('SESSION_ROTATION_INTERVAL_HOURS must be less than SESSION_IDLE_TTL_HOURS');
   }
   const r2 = parseR2Config(environment, nodeEnv);
+  const cashfreeValues = [
+    environment.CASHFREE_ENV,
+    environment.CASHFREE_APP_ID,
+    environment.CASHFREE_SECRET_KEY,
+  ];
+  const cashfreeConfigured = cashfreeValues.some((value) => Boolean(value?.trim()));
+  if (cashfreeConfigured && cashfreeValues.some((value) => !value?.trim())) {
+    throw new Error(
+      'CASHFREE_ENV, CASHFREE_APP_ID and CASHFREE_SECRET_KEY must be configured together',
+    );
+  }
+  const cashfreeEnvironment = environment.CASHFREE_ENV?.toLowerCase();
+  if (
+    cashfreeConfigured &&
+    cashfreeEnvironment !== 'sandbox' &&
+    cashfreeEnvironment !== 'production'
+  ) {
+    throw new Error('CASHFREE_ENV must be sandbox or production');
+  }
+  if (nodeEnv === 'production' && cashfreeConfigured && cashfreeEnvironment !== 'production') {
+    throw new Error('Production app cannot use Cashfree sandbox');
+  }
 
   return {
+    cashfree: cashfreeConfigured
+      ? {
+          environment: cashfreeEnvironment as 'sandbox' | 'production',
+          appId: environment.CASHFREE_APP_ID!.trim(),
+          secretKey: environment.CASHFREE_SECRET_KEY!.trim(),
+          webhookUrl: environment.CASHFREE_WEBHOOK_URL
+            ? parseUrl('CASHFREE_WEBHOOK_URL', environment.CASHFREE_WEBHOOK_URL)
+            : null,
+        }
+      : null,
     nodeEnv,
     host: environment.HOST ?? '0.0.0.0',
     port: parsePositiveInteger('PORT', environment.PORT, 3000),

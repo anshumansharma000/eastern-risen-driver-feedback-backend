@@ -21,6 +21,7 @@ import { VehicleService } from './modules/vehicles/vehicle.service.js';
 import { VendorService } from './modules/vendors/vendor.service.js';
 import { createFieldEncryptor } from './shared/security/field-encryption.js';
 import { DisabledPhotoStorage, R2PhotoStorage } from './shared/storage/photo-storage.js';
+import { CashfreeProvider } from './modules/core/integrations/cashfree.provider.js';
 
 export interface ApplicationServices {
   readonly core: CoreServices;
@@ -73,6 +74,14 @@ export function createApplicationServices(db: AppDatabase, config: AppConfig): A
     new CoreIdentityAdapter(db, passwordHasher),
     createSharedCatalogAdapter(db, vendorService, vehicleService),
     guards.authenticated,
+    config.cashfree
+      ? new CashfreeProvider(
+          config.cashfree.environment,
+          config.cashfree.appId,
+          config.cashfree.secretKey,
+          config.cashfree.webhookUrl,
+        )
+      : null,
   );
   return {
     core,

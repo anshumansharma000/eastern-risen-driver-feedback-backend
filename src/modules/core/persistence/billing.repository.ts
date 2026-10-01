@@ -395,43 +395,50 @@ export class BillingRepository {
     });
   }
   async createReceipt(input: ReceiptInput, key: string, actorId: string) {
+    return this.db.transaction((tx) => this.createReceiptInTransaction(tx, input, key, actorId));
+  }
+  /** Reconciliation commits the confirmed receipt and its order link together. */
+  async createReceiptInTransaction(
+    tx: Transaction,
+    input: ReceiptInput,
+    key: string,
+    actorId: string,
+  ) {
     validateReceipt(input);
-    return this.db.transaction(async (tx) => {
-      await this.lockKey(tx, key);
-      const [existing] = await tx.select().from(receipts).where(eq(receipts.idempotencyKey, key));
-      if (existing) {
-        this.checkRetry(existing.requestHash, input);
-        return existing;
-      }
-      const invoice = await this.lockInvoice(tx, input.invoiceId);
-      this.requireIssued(invoice);
-      if (input.receivedDate < invoice.invoiceDate)
-        throw invalid(
-          'Receipt date cannot precede the invoice date; advance payments require a separate workflow',
-        );
-      if (input.status === 'CONFIRMED') await this.checkSettlement(tx, invoice, input.amount);
-      const year = financialYear(input.receivedDate),
-        number = await this.nextNumber(tx, invoice.companyId, year, 'R');
-      const [receipt] = await tx
-        .insert(receipts)
-        .values({
-          ...input,
-          companyId: invoice.companyId,
-          receiptNumber: number,
-          financialYear: year,
-          idempotencyKey: key,
-          requestHash: requestHash(input),
-          createdBy: actorId,
-        })
-        .returning();
-      await audit(tx, actorId, 'RECEIPT_CREATED', 'receipt', receipt!.id);
-      await tx.insert(coreOutbox).values({
-        eventType: 'core.receipt.created.v1',
-        aggregateId: receipt!.id,
-        payload: { receiptId: receipt!.id, invoiceId: invoice.id, status: receipt!.status },
-      });
-      return receipt!;
+    await this.lockKey(tx, key);
+    const [existing] = await tx.select().from(receipts).where(eq(receipts.idempotencyKey, key));
+    if (existing) {
+      this.checkRetry(existing.requestHash, input);
+      return existing;
+    }
+    const invoice = await this.lockInvoice(tx, input.invoiceId);
+    this.requireIssued(invoice);
+    if (input.receivedDate < invoice.invoiceDate)
+      throw invalid(
+        'Receipt date cannot precede the invoice date; advance payments require a separate workflow',
+      );
+    if (input.status === 'CONFIRMED') await this.checkSettlement(tx, invoice, input.amount);
+    const year = financialYear(input.receivedDate),
+      number = await this.nextNumber(tx, invoice.companyId, year, 'R');
+    const [receipt] = await tx
+      .insert(receipts)
+      .values({
+        ...input,
+        companyId: invoice.companyId,
+        receiptNumber: number,
+        financialYear: year,
+        idempotencyKey: key,
+        requestHash: requestHash(input),
+        createdBy: actorId,
+      })
+      .returning();
+    await audit(tx, actorId, 'RECEIPT_CREATED', 'receipt', receipt!.id);
+    await tx.insert(coreOutbox).values({
+      eventType: 'core.receipt.created.v1',
+      aggregateId: receipt!.id,
+      payload: { receiptId: receipt!.id, invoiceId: invoice.id, status: receipt!.status },
     });
+    return receipt!;
   }
   async changeReceipt(
     id: string,
@@ -447,6 +454,11 @@ export class BillingRepository {
       if (receipt!.status === status) return receipt!;
       if (receipt!.status === 'REVERSED')
         throw conflict('RECEIPT_REVERSED', 'A reversed receipt cannot be confirmed');
+      if (status === 'REVERSED' && receipt!.method === 'GATEWAY')
+        throw conflict(
+          'GATEWAY_REFUND_REQUIRED',
+          'Gateway receipts require a verified refund workflow before reversal',
+        );
       if (status === 'CONFIRMED') {
         this.requireIssued(invoice);
         await this.checkSettlement(tx, invoice, receipt!.amount);
@@ -648,6 +660,14 @@ export class BillingRepository {
   private requireIssued(invoice: { status: string }) {
     if (invoice.status !== 'ISSUED')
       throw conflict('INVOICE_NOT_ISSUED', 'Only issued invoices accept settlements');
+  }
+  /** Holds the invoice lock until the caller's transaction completes. Receipt mutations
+   * take the same invoice lock, keeping eligibility checks and transitions atomic.
+   */
+  async settlementBalance(tx: Transaction, id: string) {
+    const [invoice] = await tx.select().from(invoices).where(eq(invoices.id, id)).for('share');
+    if (!invoice) throw missing('Invoice');
+    return { status: invoice.status, ...(await this.balance(tx, invoice)) };
   }
   private async balance(
     tx: Transaction,

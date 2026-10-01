@@ -38,6 +38,7 @@ The Core API is the operational and financial system of record for Eastern Risen
 - store Core-specific vendor and vehicle profile data without duplicating shared catalog ownership;
 - prepare, calculate, review, issue, and cancel invoices;
 - record, confirm, and reverse invoice-linked receipts;
+- manage commercial bookings, versioned quotes, customer payment schedules, and Cashfree collections against issued invoices;
 - record and reverse commercial settlement discounts;
 - view live receivables and traveller activity;
 - administer Core users and access;
@@ -75,6 +76,7 @@ The Core API is the operational and financial system of record for Eastern Risen
 - Configured IGST, CGST, and SGST application selected by an operator.
 - Import-only preservation of legacy service tax.
 - Invoice-linked receipts and settlement discounts.
+- Commercial bookings linked optionally to operational/feedback bookings; versioned quotes, accepted quote timestamps, issued-invoice linking, configurable INR payment milestones, and verified Cashfree collection.
 - Current receivables and guest activity reporting.
 - Audit records and a transactional outbox.
 - Normalized historical issued-invoice import.
@@ -88,21 +90,31 @@ The following are not capabilities of v1 and must not be implied by a client:
 - tax-inclusive pricing, alternate valuation bases, or special tax regimes;
 - multiple currencies or currency conversion;
 - mixed service categories within one invoice;
-- quotations, pro-forma invoices, purchase orders, credit notes, or debit notes;
+- pro-forma invoices, purchase orders, credit notes, or debit notes;
 - invoice PDF generation, email delivery, or messaging delivery;
-- recurring invoices or automated payment collection;
+- recurring invoices;
 - advance payments, customer credit balances, or unallocated overpayments;
 - partial allocation of one receipt across multiple invoices;
 - refunds or bank reconciliation;
-- inventory, itinerary execution, booking operations, payroll, or general ledger accounting;
+- inventory, itinerary execution, payroll, or general ledger accounting;
 - hard deletion of Core business records;
 - company-scoped tenancy or per-company role membership;
 - one account holding multiple roles or simultaneous module memberships;
-- public or customer self-service access;
+- general customer accounts or self-service beyond a private commercial booking link;
 - outbox delivery to an event broker;
 - master-data bulk import, historical receipt import, or historical cancelled-invoice import.
 
 New work in any of these areas requires an explicit product decision, data model, permission model, migration plan, API contract, and tests.
+
+### 3.3 Commercial booking and payment decision
+
+Commercial bookings live in Core and are separate from the existing operational bookings. One operational booking may link to one confirmed commercial booking; the link is optional for legacy and driver-only work. Core owns customer, agreed quote, invoice link, payment schedule, and payment orders. Operational bookings continue to own trips, engagements, and feedback.
+
+The first collection flow is quote acceptance, full tax-invoice issuance, payment schedule, then one or more payments. The invoice is the tax and receivable source of truth. A successful Cashfree payment creates exactly one confirmed Core receipt against that invoice. Cashfree orders and callbacks alone do not settle an invoice. Pre-invoice advances are not supported; receiving them requires a later explicit tax and receipt-voucher workflow. This product does not determine statutory GST liability, prepare returns, generate credit notes, or automate refunds.
+
+Core administrators configure the default initial percentage and balance timing by company. Staff may enter a custom schedule before collection. Customer access uses a 256-bit private token stored as a hash; staff can rotate it. The public API exposes only the quote, invoice summary, and payment milestones needed for review and checkout. Webhooks use the original request bytes for signature verification and are reconciled against Cashfree's server API before a receipt is recorded. The payment provider is behind a small application interface to allow replacement without changing booking or billing rules.
+
+Migrations add new Core commercial tables and one nullable, unique link from existing operational bookings. Existing records remain valid. The HTTP contract is documented in `CORE_API.md`; tests cover schedule calculation, webhook verification and raw-body handling. Refunds, credit-note handling, PDF delivery, and automated customer messaging are follow-on work and must be handled through existing administrative processes until implemented.
 
 ## 4. System and ownership boundaries
 
@@ -249,6 +261,9 @@ Clients must show the safe `message`, preserve the request ID for support, and n
 | POST | `/api/v1/auth/core/login` | Public; 5 attempts/minute | `{username,password}` → `{data:{user,expiresAt}}` and session cookie |
 | GET | `/api/v1/auth/me` | Authenticated | `{data:{user}}` |
 | POST | `/api/v1/auth/logout` | Any current session | Revokes session, clears cookie, returns 204 |
+
+Core login accepts either a username or email address in the `username` field (up to
+320 characters), matched case-insensitively after trimming surrounding whitespace.
 
 The principal is:
 

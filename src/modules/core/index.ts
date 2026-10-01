@@ -14,18 +14,25 @@ import { billingRoutes } from './http/billing.routes.js';
 import { userRoutes } from './http/users.routes.js';
 import { catalogRoutes } from './http/catalog.routes.js';
 import { AppError } from '../../shared/errors/app-error.js';
+import { CommercialService } from './application/commercial.service.js';
+import type { PaymentProvider } from './application/payment-provider.js';
+import { commercialRoutes } from './http/commercial.routes.js';
 import { isPostgresError } from '../../shared/database/postgres-error.js';
 export function createCoreServices(
   db: CoreDatabase,
   identity: CoreIdentity,
   catalog: SharedCatalog,
   authenticated: preHandlerAsyncHookHandler,
+  paymentProvider: PaymentProvider | null = null,
 ) {
+  const billing = new BillingRepository(db, catalog);
   return {
     masters: new MastersRepository(db, catalog),
     reports: new ReportsRepository(db),
     reporting: new ReportingRepository(db),
-    billing: new BillingRepository(db, catalog),
+    billing,
+    commercial: new CommercialService(db, billing, paymentProvider),
+    paymentProvider,
     identity,
     catalog,
     guards: createCoreGuards(authenticated),
@@ -72,4 +79,5 @@ export const coreRoutes: FastifyPluginAsyncTypebox<{ services: CoreServices }> =
   await app.register(billingRoutes, { services: options.services });
   await app.register(userRoutes, { services: options.services });
   await app.register(catalogRoutes, { services: options.services });
+  await app.register(commercialRoutes, { services: options.services });
 };

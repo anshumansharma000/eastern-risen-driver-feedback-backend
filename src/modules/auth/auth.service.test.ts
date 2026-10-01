@@ -16,7 +16,7 @@ const activeAdmin: AuthAccount = {
 
 function createRepository(account: AuthAccount | null = activeAdmin): AuthRepository {
   return {
-    findCoreByUsername: vi.fn().mockResolvedValue(account),
+    findCoreByUsernameOrEmail: vi.fn().mockResolvedValue(account),
     findAdminByEmail: vi.fn().mockResolvedValue(account),
     findDriverByCode: vi.fn().mockResolvedValue(account),
     createSession: vi.fn().mockResolvedValue(undefined),
@@ -43,6 +43,55 @@ describe('AuthService', () => {
     rotationIntervalHours: 24,
     rotationGraceSeconds: 60,
   };
+
+  it.each([' CORE.USER ', ' CORE.USER@EXAMPLE.COM '])(
+    'signs in a core user with a normalized username or email: %s',
+    async (identifier) => {
+      const account: AuthAccount = { ...activeAdmin, role: 'CORE_ADMIN' };
+      const repository = createRepository(account);
+      const passwords = createPasswordHasher();
+      const service = new AuthService(repository, passwords, options);
+
+      const session = await service.loginCore(identifier, 'correct-password');
+
+      expect(repository.findCoreByUsernameOrEmail).toHaveBeenCalledWith(
+        identifier.trim().toLowerCase(),
+      );
+      expect(passwords.verify).toHaveBeenCalledWith(account.passwordHash, 'correct-password');
+      expect(session.principal.role).toBe('CORE_ADMIN');
+      expect(repository.createSession).toHaveBeenCalled();
+    },
+  );
+
+  it('rejects an unknown core email without creating a session', async () => {
+    const repository = createRepository(null);
+    const passwords = createPasswordHasher();
+    const service = new AuthService(repository, passwords, options);
+
+    await expect(service.loginCore('missing@example.com', 'password')).rejects.toMatchObject({
+      code: 'AUTHENTICATION_FAILED',
+    });
+    expect(passwords.performDummyVerification).toHaveBeenCalledWith('password');
+    expect(repository.createSession).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { status: 'ACTIVE' as const, validPassword: false },
+    { status: 'DEACTIVATED' as const, validPassword: true },
+    { status: 'ARCHIVED' as const, validPassword: true },
+  ])('rejects core email login with invalid credentials or status: %j', async (input) => {
+    const repository = createRepository({
+      ...activeAdmin,
+      role: 'CORE_ADMIN',
+      status: input.status,
+    });
+    const service = new AuthService(repository, createPasswordHasher(input.validPassword), options);
+
+    await expect(service.loginCore('core@example.com', 'password')).rejects.toMatchObject({
+      code: 'AUTHENTICATION_FAILED',
+    });
+    expect(repository.createSession).not.toHaveBeenCalled();
+  });
 
   it('creates a hashed, expiring session after valid credentials', async () => {
     const repository = createRepository();

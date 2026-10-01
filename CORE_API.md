@@ -61,8 +61,10 @@ requires no operational work.
 
 ## Authentication and permissions
 
-`POST /api/v1/auth/core/login` accepts `username` and `password` and uses the existing
-secure session-cookie infrastructure. `/api/v1/auth/me` and `/logout` are shared.
+`POST /api/v1/auth/core/login` accepts `username` and `password`. The `username` field
+can contain either the core account's username or email address (up to 320 characters).
+Both are matched case-insensitively after trimming surrounding whitespace. Login uses
+the existing secure session-cookie infrastructure. `/api/v1/auth/me` and `/logout` are shared.
 Username is case-insensitively unique; existing accounts retain a null username.
 Core users can read and edit their own username, display name, and email at
 `GET|PATCH /api/v1/core/profile`; `POST /api/v1/core/profile/change-password`
@@ -156,6 +158,54 @@ Companies may retain unknown address/state/country as null during migration, but
 these must be completed before issuing new invoices. Hotel-rate start dates can
 remain null when legacy data only supplies a validity end date. New tax rules need
 an effective-from date. Optional market values remain null when unknown.
+
+## Commercial booking and Cashfree flow
+
+Staff create a Core commercial booking, add a versioned quote, and share its private token with the customer. Only a customer holding that token can accept the latest quote. Staff then create and issue the full invoice through the existing invoice API, link it to the commercial booking, and create an INR payment schedule. The invoice must match the accepted quote's company, customer, service category, and total. The payment schedule must sum to the invoice total. No payment is allowed before an issued invoice is linked.
+
+The company default is 30% initially and 70% 30 days before travel; bookings within 30 days of travel require full payment. A Core administrator can configure the percentages and timing per company at `PUT /companies/:id/payment-policy`. Staff can supply explicit milestones when creating the schedule. Dates and amounts are frozen once the schedule has been set. The legacy operational booking has an optional `commercialBookingId` and can link only after commercial confirmation.
+
+`GET /commercial-bookings/:id` returns `{ data: { booking, quotes, milestones, orders, invoice } }`.
+Every milestone includes a derived `remainingAmount` and `status`: `PENDING` for no
+coverage, `PARTIALLY_PAID` for partial coverage, and `PAID` for full coverage. Only
+confirmed receipts for the linked invoice cover milestones, in ascending `position`
+order, regardless of which milestone a gateway order references. Pending/reversed
+receipts and order statuses do not contribute. Settlement discounts reduce invoice
+debt separately and do not count as collected cash. All allocation uses integer paise.
+Public booking milestones expose the same `status` and `remainingAmount`, retaining
+`paid` and `remaining` as compatible aliases. No milestone `paidAt` is stored or
+inferred from gateway timestamps.
+
+Confirmation uses the same allocation and requires the first milestone to be fully
+covered. Its balance check, booking transition, and audit entry are transactional;
+invoice locks serialize this check with receipt confirmation/reversal. Gateway
+reconciliation locks the order and commits its confirmed receipt and order link in
+one transaction, retaining provider-payment idempotency and overpayment checks.
+Existing bookings derive their balances on the next detail read; no allocation
+backfill or repair command is needed. Clients must fetch fresh details after
+reconciliation or receipt mutations to display changes.
+
+| Staff endpoint                                             | Purpose                                                                  |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `POST /commercial-bookings`                                | Create booking and return the private token once.                        |
+| `GET /commercial-bookings`, `GET /commercial-bookings/:id` | List and inspect commercial records.                                     |
+| `POST /commercial-bookings/:id/quotes`                     | Create the next quote version.                                           |
+| `GET /commercial-bookings/:id/available-invoices`          | Search all invoices and show booking-link eligibility.                   |
+| `POST /commercial-bookings/:id/rotate-link`                | Replace a lost or compromised private token.                             |
+| `POST /commercial-bookings/:id/invoice`                    | Link an issued, matching invoice after quote acceptance.                 |
+| `POST /commercial-bookings/:id/schedule`                   | Create default or explicit payment milestones.                           |
+| `POST /commercial-bookings/:id/status`                     | Confirm, cancel, or complete. Confirmation requires the initial payment. |
+| `POST /payment-orders/:orderId/reconcile`                  | Retry provider verification and receipt creation.                        |
+
+`GET /commercial-bookings/:id/available-invoices?q=itinerary&page=1&pageSize=25` searches the full invoice register before evaluating booking eligibility. `q` matches invoice number, customer name, guest name/text, invoice label (the optional tour/description text), and invoice line description, case insensitively. All statuses, companies, customers, categories, totals, and link states are considered. The response is `{ data: [{ id, invoiceNumber, financialYear, invoiceDate, status, grandTotal, customerName, guestName, label, lineDescription, eligible, unavailableReasons }], pagination: { page, pageSize, total } }`. `invoiceNumber` and `financialYear` are null for drafts. `lineDescription` is the first matching line description when searching by line text, or the first line when `q` is omitted; it may be null. Results are sorted by invoice date descending and paginated; `pageSize` defaults to 25 and may be up to 100. `unavailableReasons` explains any status, link, company, customer, category, quote-acceptance, or total mismatch. Link only a result with `eligible: true` using `POST /commercial-bookings/:id/invoice` and `{ "invoiceNumber": "I/2627/000001", "financialYear": "2627" }`. The link operation rechecks eligibility. The older `{ "invoiceId": "..." }` request remains supported. The booking continues to store the invoice UUID internally.
+
+The customer endpoints are `GET /public/bookings/:token`, `POST /public/bookings/:token/accept`, `POST /public/bookings/:token/milestones/:milestoneId/checkout`, and `POST /public/bookings/:token/orders/:orderId/reconcile`. Checkout returns a Cashfree `payment_session_id` for the hosted checkout integration. A customer link can be copied by staff; no email or WhatsApp delivery is performed by this backend.
+
+Cashfree notifications arrive at `POST /payments/webhooks/cashfree` under the Core prefix. Configure this exact URL in the Cashfree dashboard. The endpoint verifies the signature over the original body and timestamp, then fetches the successful payment from Cashfree before creating an invoice-linked `GATEWAY` receipt. It checks currency and amount, and uses the provider payment ID as the receipt idempotency key. Gateway receipt creation is not available through the staff receipt endpoint. Keep `CASHFREE_ENV`, `CASHFREE_APP_ID`, and `CASHFREE_SECRET_KEY` in server-side environment secrets. `CASHFREE_ENV` is `sandbox` or `production`. Set `CASHFREE_WEBHOOK_URL` to the public notification URL so new orders include `notify_url`.
+
+If Cashfree confirms money received after the invoice has been cancelled or its outstanding balance has changed, the order is marked `REVIEW_REQUIRED` with the provider payment identifier and timestamp. The system does not invent a receipt or silently discard the collection; finance must resolve it before treating the booking as settled.
+
+The existing invoice remains the sole tax and receivable record. Cashfree orders are collection records. There is no pre-invoice advance support, automated refund, credit note, invoice PDF, or automatic payment-link messaging in this release. Gateway receipts cannot be reversed through the manual receipt endpoint because that would not return money to the customer. Paid-booking refunds and related tax adjustments require a separate reviewed process before reversing accounting records.
 
 ## Invoice workflow
 

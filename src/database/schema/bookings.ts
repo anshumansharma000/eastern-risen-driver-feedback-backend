@@ -2,12 +2,16 @@ import { sql } from 'drizzle-orm';
 import { check, index, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { authAccounts } from './accounts.js';
 import { bookingStatus } from './enums.js';
+import { commercialBookings } from '../../modules/core/persistence/commercial.schema.js';
 
 export const bookings = pgTable(
   'bookings',
   {
     id: uuid('id').primaryKey().defaultRandom(),
     bookingReference: text('booking_reference').notNull(),
+    commercialBookingId: uuid('commercial_booking_id').references(() => commercialBookings.id, {
+      onDelete: 'restrict',
+    }),
     tourName: text('tour_name'),
     fileNumber: text('file_number'),
     passengerName: text('passenger_name').notNull(),
@@ -25,6 +29,7 @@ export const bookings = pgTable(
   },
   (table) => [
     uniqueIndex('bookings_reference_unique').on(sql`lower(${table.bookingReference})`),
+    uniqueIndex('bookings_commercial_booking_unique').on(table.commercialBookingId),
     index('bookings_status_starts_idx').on(table.status, table.startsAt),
     check('bookings_period_check', sql`${table.endsAt} > ${table.startsAt}`),
     check(

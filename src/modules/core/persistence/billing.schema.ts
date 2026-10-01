@@ -21,7 +21,14 @@ import type {
 import type { AppliedTax, TaxTreatment } from '../domain/billing.js';
 export const invoiceStatus = core.enum('invoice_status', ['DRAFT', 'ISSUED', 'CANCELLED']);
 export const receiptStatus = core.enum('receipt_status', ['PENDING', 'CONFIRMED', 'REVERSED']);
-export const paymentMethod = core.enum('payment_method', ['CASH', 'CHEQUE', 'DD', 'CARD', 'UPI']);
+export const paymentMethod = core.enum('payment_method', [
+  'CASH',
+  'CHEQUE',
+  'DD',
+  'CARD',
+  'UPI',
+  'GATEWAY',
+]);
 export const invoices = core.table(
   'invoices',
   {
