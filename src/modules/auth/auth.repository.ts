@@ -4,6 +4,7 @@ import { authAccounts, authSessions, drivers } from '../../database/schema/index
 import type { AuthAccount, ResolvedAuthSession } from './auth.types.js';
 
 export interface AuthRepository {
+  findCustomerByEmail(email: string): Promise<AuthAccount | null>;
   findCoreByUsernameOrEmail(identifier: string): Promise<AuthAccount | null>;
   findAdminByEmail(email: string): Promise<AuthAccount | null>;
   findDriverByCode(driverCode: string): Promise<AuthAccount | null>;
@@ -38,6 +39,16 @@ const accountSelection = {
 
 export class DrizzleAuthRepository implements AuthRepository {
   constructor(private readonly db: AppDatabase) {}
+
+  async findCustomerByEmail(email: string): Promise<AuthAccount | null> {
+    const [account] = await this.db
+      .select(accountSelection)
+      .from(authAccounts)
+      .leftJoin(drivers, eq(drivers.accountId, authAccounts.id))
+      .where(and(eq(authAccounts.role, 'CUSTOMER'), eq(sql`lower(${authAccounts.email})`, email)))
+      .limit(1);
+    return account ?? null;
+  }
 
   async findCoreByUsernameOrEmail(identifier: string): Promise<AuthAccount | null> {
     const [account] = await this.db

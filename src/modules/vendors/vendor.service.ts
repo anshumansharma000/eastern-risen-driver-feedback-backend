@@ -1,4 +1,5 @@
-import { asc, count, eq, ne } from 'drizzle-orm';
+import { textSearch } from '../../shared/database/search.js';
+import { and, asc, count, eq, ne } from 'drizzle-orm';
 import type { AppDatabase } from '../../database/client.js';
 import { auditEvents, vendors } from '../../database/schema/index.js';
 import { AppError } from '../../shared/errors/app-error.js';
@@ -14,6 +15,7 @@ export interface CreateVendorInput {
 
 export interface ListVendorsInput {
   readonly status?: AccountStatus;
+  readonly q?: string;
   readonly page: number;
   readonly pageSize: number;
 }
@@ -110,7 +112,15 @@ export class VendorService {
   }
 
   async list(input: ListVendorsInput) {
-    const filter = input.status ? eq(vendors.status, input.status) : ne(vendors.status, 'ARCHIVED');
+    const filter = and(
+      input.status ? eq(vendors.status, input.status) : ne(vendors.status, 'ARCHIVED'),
+      textSearch(input.q, [
+        vendors.name,
+        vendors.contactName,
+        vendors.contactEmail,
+        vendors.contactPhone,
+      ]),
+    );
     const offset = (input.page - 1) * input.pageSize;
     const [items, [total]] = await Promise.all([
       this.db

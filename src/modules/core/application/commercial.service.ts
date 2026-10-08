@@ -1,13 +1,23 @@
+import { CommercialBookingListRepository } from '../persistence/booking-list.repository.js';
+import type { BookingListQuery } from '../http/booking-list.schemas.js';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { and, asc, count, desc, eq, exists, ilike, inArray, or, sql } from 'drizzle-orm';
-import type { CoreDatabase } from '../persistence/database.js';
+import type { CoreDatabase, CoreTransaction } from '../persistence/database.js';
 import type { PaymentProvider } from './payment-provider.js';
 import type { BillingRepository } from '../persistence/billing.repository.js';
 import { customers } from '../persistence/masters.schema.js';
-import { invoiceLines, invoices } from '../persistence/billing.schema.js';
+import {
+  invoiceLines,
+  invoiceLineTaxes,
+  invoices,
+  receipts,
+} from '../persistence/billing.schema.js';
 import {
   commercialBookings,
   commercialQuotes,
+  paymentAttempts,
+  paymentReconciliationJobs,
+  paymentWebhookEvents,
   paymentMilestones,
   paymentOrders,
   paymentPolicies,
@@ -15,8 +25,24 @@ import {
 import { conflict, invalid, missing } from '../domain/errors.js';
 import { decimal, minor, sum } from '../domain/money.js';
 import { allocateMilestones } from '../domain/milestones.js';
+import type { InvoiceInput } from './billing.contracts.js';
+import type {
+  StructuredQuoteInput,
+  ProposedPlan,
+  InvoiceReviewDetails,
+} from './commercial.contracts.js';
+import { requestHash } from '../persistence/billing.repository.js';
+import { validateDate } from '../domain/validation.js';
+import { validateProposedMilestones } from '../domain/proposed-plan.js';
 import { audit } from '../persistence/audit.js';
+import { enqueuePaymentReconciliation } from './payment-reconciliation.js';
 import { AppError } from '../../../shared/errors/app-error.js';
+import type { ReviewReason } from './payment-review.contracts.js';
+
+export type BookingAuthorization = (
+  tx: CoreTransaction,
+  booking: typeof commercialBookings.$inferSelect,
+) => Promise<void>;
 
 export interface MilestoneInput {
   label: string;
@@ -37,7 +63,10 @@ export interface QuoteInput {
   inclusions: string;
   exclusions: string;
   terms: string;
-  total: string;
+  total?: string;
+  lines?: StructuredQuoteInput['lines'];
+  taxEffectiveDate?: string;
+  paymentPlan?: StructuredQuoteInput['paymentPlan'];
   expiresOn?: string | null;
 }
 const tokenHash = (token: string) => createHash('sha256').update(token).digest('hex');
@@ -49,6 +78,7 @@ export class CommercialService {
     private readonly db: CoreDatabase,
     private readonly billing: BillingRepository,
     private readonly provider: PaymentProvider | null,
+    private readonly pendingReviewAfterHours = 24,
   ) {}
 
   async create(input: CommercialBookingInput, actorId: string) {
@@ -77,13 +107,12 @@ export class CommercialService {
     return { booking: booking!, accessToken: token };
   }
 
-  async list(page: number, pageSize: number) {
-    return this.db
-      .select()
-      .from(commercialBookings)
-      .orderBy(desc(commercialBookings.createdAt))
-      .limit(pageSize)
-      .offset((page - 1) * pageSize);
+  async list(page: number, pageSize: number, filters: BookingListQuery = {}) {
+    return (await this.listPage({ ...filters, page, pageSize })).items;
+  }
+
+  async listPage(input: BookingListQuery) {
+    return new CommercialBookingListRepository(this.db).list(input);
   }
 
   private async requireBooking(id: string) {
@@ -120,12 +149,36 @@ export class CommercialService {
             ),
           )
       : [];
+    const attempts = orders.length
+      ? await this.db
+          .select()
+          .from(paymentAttempts)
+          .where(
+            inArray(
+              paymentAttempts.orderId,
+              orders.map((order) => order.id),
+            ),
+          )
+      : [];
+    const reconciliation = orders.length
+      ? await this.db
+          .select()
+          .from(paymentReconciliationJobs)
+          .where(
+            inArray(
+              paymentReconciliationJobs.orderId,
+              orders.map((order) => order.id),
+            ),
+          )
+      : [];
     const invoice = booking.invoiceId ? await this.billing.get(booking.invoiceId) : null;
     return {
       booking,
-      quotes,
+      quotes: quotes.map((quote) => ({ ...quote, legacy: !quote.pricing })),
       milestones: allocateMilestones(milestones, invoice?.receivedAmount ?? '0.00'),
       orders,
+      attempts,
+      reconciliation,
       invoice,
     };
   }
@@ -161,6 +214,7 @@ export class CommercialService {
           ilike(customerName, pattern),
           ilike(customers.name, pattern),
           ilike(guestName, pattern),
+          ilike(sql<string>`coalesce(${invoices.details}->>'guestDisplayText', '')`, pattern),
           ilike(label, pattern),
           exists(
             this.db
@@ -263,7 +317,12 @@ export class CommercialService {
 
   async publicDetail(token: string) {
     const booking = await this.byToken(token);
-    const detail = await this.get(booking.id);
+    return this.customerDetail(booking.id);
+  }
+
+  async customerDetail(id: string) {
+    const detail = await this.get(id);
+    const booking = detail.booking;
     return {
       reference: booking.reference,
       title: booking.title,
@@ -272,6 +331,10 @@ export class CommercialService {
       serviceEndsOn: booking.serviceEndsOn,
       quote: detail.quotes[0]
         ? {
+            id: detail.quotes[0].id,
+            legacy: !detail.quotes[0].pricing,
+            pricing: detail.quotes[0].pricing,
+            proposedPlan: detail.quotes[0].proposedPlan,
             version: detail.quotes[0].version,
             description: detail.quotes[0].description,
             inclusions: detail.quotes[0].inclusions,
@@ -293,7 +356,36 @@ export class CommercialService {
             paymentStatus: detail.invoice.paymentStatus,
           }
         : null,
-      paymentReviewRequired: detail.orders.some((order) => order.status === 'REVIEW_REQUIRED'),
+      paymentReady:
+        detail.invoice?.status === 'ISSUED' &&
+        detail.milestones.length > 0 &&
+        ['INVOICED', 'CONFIRMED'].includes(booking.status),
+      nextAction: ['CANCELLED', 'COMPLETED'].includes(booking.status)
+        ? 'BOOKING_CLOSED'
+        : !detail.quotes[0]
+          ? 'AWAIT_QUOTE'
+          : !detail.quotes[0].acceptedAt
+            ? detail.quotes[0].expiresOn && detail.quotes[0].expiresOn < today()
+              ? 'QUOTE_EXPIRED'
+              : 'REVIEW_AND_ACCEPT'
+            : detail.invoice?.status === 'ISSUED' && detail.milestones.length > 0
+              ? detail.invoice.dueAmount === '0.00'
+                ? 'PAYMENT_COMPLETE'
+                : 'PAY'
+              : 'AWAIT_ADMIN_PAYMENT_ENABLEMENT',
+      paymentReviewRequired:
+        detail.orders.some(
+          (order) => order.status === 'REVIEW_REQUIRED' || order.reviewRequiredAt !== null,
+        ) ||
+        detail.attempts.some(
+          (a) =>
+            a.status === 'SUCCESS' &&
+            a.accountingStatus !== 'REFUNDED' &&
+            (a.accountingStatus === 'REVIEW_REQUIRED' ||
+              detail.invoice?.receipts.some(
+                (r) => r.id === a.receiptId && r.status === 'REVERSED',
+              )),
+        ),
       payments: (detail.invoice?.receipts ?? [])
         .filter((receipt) => receipt.status === 'CONFIRMED')
         .map((receipt) => ({
@@ -316,8 +408,257 @@ export class CommercialService {
     };
   }
 
+  private async proposedQuote(
+    tx: CoreTransaction,
+    booking: typeof commercialBookings.$inferSelect,
+    input: StructuredQuoteInput,
+  ) {
+    const pricing = await this.billing.calculateQuote(
+      tx,
+      input.lines,
+      booking.serviceCategoryId,
+      input.taxEffectiveDate,
+    );
+    if (minor(pricing.grandTotal) <= 0n) throw invalid('Quote total must be positive');
+    let policy: ProposedPlan['policy'] = null;
+    let milestones: MilestoneInput[];
+    if (input.paymentPlan.mode === 'COMPANY_DEFAULT') {
+      if (input.paymentPlan.milestones)
+        throw invalid('Default payment plans cannot contain custom milestones');
+      if (!booking.serviceStartsOn)
+        throw conflict(
+          'PAYMENT_PLAN_PREREQUISITES_MISSING',
+          'Provide a service start date or a custom payment plan',
+        );
+      const [saved] = await tx
+        .select()
+        .from(paymentPolicies)
+        .where(eq(paymentPolicies.companyId, booking.companyId))
+        .for('share');
+      policy = saved
+        ? {
+            initialPercent: saved.initialPercent,
+            balanceDaysBefore: saved.balanceDaysBefore,
+            fullPaymentWithinDays: saved.fullPaymentWithinDays,
+          }
+        : { initialPercent: 30, balanceDaysBefore: 30, fullPaymentWithinDays: 30 };
+      milestones = this.defaultSchedule(pricing.grandTotal, booking.serviceStartsOn, policy);
+    } else {
+      if (!input.paymentPlan.milestones) throw invalid('Custom payment plans require milestones');
+      milestones = input.paymentPlan.milestones;
+    }
+    validateProposedMilestones(milestones, pricing.grandTotal, today());
+    const proposedPlan: ProposedPlan = {
+      mode: input.paymentPlan.mode,
+      milestones: milestones.map((m) => ({ ...m, label: m.label.trim() })),
+      policy,
+      resolvedOn: today(),
+      overdueRule: 'KEEP_ACCEPTED_DATES',
+    };
+    return { pricing, proposedPlan };
+  }
+
+  async calculateQuote(id: string, input: StructuredQuoteInput) {
+    return this.db.transaction(async (tx) => {
+      const [booking] = await tx
+        .select()
+        .from(commercialBookings)
+        .where(eq(commercialBookings.id, id))
+        .for('share');
+      if (!booking) throw missing('Commercial booking');
+      return this.proposedQuote(tx, booking, input);
+    });
+  }
+
+  private async reviewInTransaction(
+    tx: CoreTransaction,
+    booking: typeof commercialBookings.$inferSelect,
+    details: Partial<InvoiceReviewDetails>,
+  ) {
+    const [quote] = await tx
+      .select()
+      .from(commercialQuotes)
+      .where(eq(commercialQuotes.bookingId, booking.id))
+      .orderBy(desc(commercialQuotes.version))
+      .limit(1);
+    const errors: { code: string; message: string }[] = [];
+    if (booking.invoiceId || booking.status !== 'QUOTED')
+      errors.push({
+        code: 'LEGACY_BILLING_CONFLICT',
+        message:
+          'Continue existing manual billing for partially processed bookings; closed bookings cannot enable payment',
+      });
+    if (!quote?.acceptedAt)
+      errors.push({ code: 'QUOTE_NOT_ACCEPTED', message: 'Customer must accept the latest quote' });
+    if (!quote?.pricing || !quote.proposedPlan)
+      errors.push({
+        code: 'LEGACY_QUOTE_REQUIRES_REVISION',
+        message: 'Use manual billing or prepare a structured revision and obtain fresh acceptance',
+      });
+    const existing = await tx
+      .select({ id: paymentMilestones.id })
+      .from(paymentMilestones)
+      .where(eq(paymentMilestones.bookingId, booking.id));
+    if (existing.length)
+      errors.push({
+        code: 'LEGACY_BILLING_CONFLICT',
+        message: 'Continue the existing billing workflow',
+      });
+    const agreedDueDate = quote?.proposedPlan?.milestones
+      .map((m) => m.dueOn)
+      .sort()
+      .at(-1);
+    if (details.dueDate && details.dueDate !== agreedDueDate && quote?.proposedPlan)
+      errors.push({
+        code: 'AGREED_PAYMENT_TERMS_CHANGED',
+        message: 'Invoice due date must match the final accepted milestone date',
+      });
+    const fields = {
+      ...details,
+      companyId: booking.companyId,
+      customerId: booking.customerId,
+      serviceCategoryId: booking.serviceCategoryId,
+      lines:
+        quote?.pricing?.lines.map((l) => ({
+          description: l.description,
+          amount: l.amount,
+          taxTreatment: l.taxTreatment,
+          taxComponents: l.taxes.map((t) => t.component),
+        })) ?? [],
+    };
+    const required = [
+      'invoiceDate',
+      'guestDisplayText',
+      'serviceProvidedAt',
+      'placeOfSupplyState',
+      'placeOfSupplyCountry',
+      'bankAccountIds',
+    ] as const;
+    const missingFields = required.filter(
+      (key) =>
+        fields[key] === undefined ||
+        fields[key] === null ||
+        (typeof fields[key] === 'string' && !fields[key].trim()),
+    );
+    let calculated: Awaited<ReturnType<BillingRepository['previewInTransaction']>> | null = null;
+    if (!missingFields.length && quote?.pricing) {
+      try {
+        calculated = await this.billing.previewInTransaction(tx, fields as InvoiceInput);
+        if (
+          requestHash(calculated.lines) !== requestHash(quote.pricing.lines) ||
+          calculated.grandTotal !== quote.total
+        )
+          errors.push({
+            code: 'QUOTE_PRICING_REVIEW_REQUIRED',
+            message:
+              'Invoice calculation differs from agreed pricing; revise quote and obtain fresh acceptance',
+          });
+      } catch (error) {
+        if (!(error instanceof AppError)) throw error;
+        errors.push({ code: error.code, message: error.message });
+      }
+    }
+    const eligible = errors.length === 0 && missingFields.length === 0;
+    const reviewToken = eligible
+      ? requestHash({
+          bookingId: booking.id,
+          quoteId: quote!.id,
+          fields,
+          calculated,
+          proposedPlan: quote!.proposedPlan,
+        })
+      : null;
+    return {
+      bookingId: booking.id,
+      quoteId: quote?.id ?? null,
+      quoteVersion: quote?.version ?? null,
+      invoiceFields: fields,
+      pricing: quote?.pricing ?? null,
+      proposedPlan: quote?.proposedPlan ?? null,
+      missingFields,
+      errors,
+      eligible,
+      reviewToken,
+    };
+  }
+
+  async billingReview(id: string, details: Partial<InvoiceReviewDetails>) {
+    return this.db.transaction(async (tx) => {
+      const [booking] = await tx
+        .select()
+        .from(commercialBookings)
+        .where(eq(commercialBookings.id, id))
+        .for('update');
+      if (!booking) throw missing('Commercial booking');
+      return this.reviewInTransaction(tx, booking, details);
+    });
+  }
+
+  async enablePayment(
+    id: string,
+    input: { quoteId: string; reviewToken: string; invoiceDetails: InvoiceReviewDetails },
+    actorId: string,
+  ) {
+    await this.db.transaction(async (tx) => {
+      const [booking] = await tx
+        .select()
+        .from(commercialBookings)
+        .where(eq(commercialBookings.id, id))
+        .for('update');
+      if (!booking) throw missing('Commercial booking');
+      const hash = requestHash(input);
+      if (booking.paymentActivation) {
+        if (booking.paymentActivation.requestHash !== hash)
+          throw conflict(
+            'IDEMPOTENCY_CONFLICT',
+            'Payment was enabled using a different request; reload booking',
+          );
+        return;
+      }
+      const review = await this.reviewInTransaction(tx, booking, input.invoiceDetails);
+      if (review.quoteId !== input.quoteId)
+        throw conflict('STALE_BILLING_REVIEW', 'Quote changed; review the latest accepted quote');
+      if (review.errors.length) throw conflict(review.errors[0]!.code, review.errors[0]!.message);
+      if (review.missingFields.length)
+        throw invalid(`Complete invoice fields: ${review.missingFields.join(', ')}`);
+      if (review.reviewToken !== input.reviewToken)
+        throw conflict('STALE_BILLING_REVIEW', 'Billing data changed; review again');
+      // All issuance, numbering, audit and outbox effects remain inside this transaction.
+      const invoiceId = await this.billing.createDraftInTransaction(
+        tx,
+        review.invoiceFields as InvoiceInput,
+        actorId,
+      );
+      await this.billing.issueInTransaction(tx, invoiceId, 1, actorId);
+      await tx
+        .insert(paymentMilestones)
+        .values(
+          review.proposedPlan!.milestones.map((m, i) => ({ ...m, bookingId: id, position: i + 1 })),
+        );
+      await tx
+        .update(commercialBookings)
+        .set({
+          invoiceId,
+          status: 'INVOICED',
+          paymentActivation: { quoteId: input.quoteId, requestHash: hash },
+          updatedAt: new Date(),
+        })
+        .where(eq(commercialBookings.id, id));
+      await audit(tx, actorId, 'COMMERCIAL_PAYMENT_ENABLED', 'commercial_booking', id);
+    });
+    return this.get(id);
+  }
+
   async addQuote(id: string, input: QuoteInput, actorId: string) {
-    if (minor(input.total) <= 0n) throw invalid('Quote total must be positive');
+    if (input.expiresOn) validateDate(input.expiresOn);
+    const structured = input.lines !== undefined;
+    if (
+      structured !== (input.paymentPlan !== undefined) ||
+      structured !== (input.taxEffectiveDate !== undefined)
+    )
+      throw invalid('Structured quotes require lines, taxEffectiveDate and paymentPlan together');
+    if (!structured && (!input.total || minor(input.total) <= 0n))
+      throw invalid('Quote total must be positive');
     return this.db.transaction(async (tx) => {
       const [booking] = await tx
         .select()
@@ -333,6 +674,11 @@ export class CommercialService {
         .where(eq(commercialQuotes.bookingId, id))
         .orderBy(desc(commercialQuotes.version))
         .limit(1);
+      const snapshot = structured
+        ? await this.proposedQuote(tx, booking, input as StructuredQuoteInput)
+        : null;
+      if (snapshot && input.total && minor(input.total) !== minor(snapshot.pricing.grandTotal))
+        throw invalid('Supplied total does not match calculated total');
       const [quote] = await tx
         .insert(commercialQuotes)
         .values({
@@ -342,7 +688,9 @@ export class CommercialService {
           inclusions: input.inclusions.trim(),
           exclusions: input.exclusions.trim(),
           terms: input.terms.trim(),
-          total: input.total,
+          total: snapshot?.pricing.grandTotal ?? input.total!,
+          pricing: snapshot?.pricing ?? null,
+          proposedPlan: snapshot?.proposedPlan ?? null,
           expiresOn: input.expiresOn ?? null,
         })
         .returning();
@@ -355,30 +703,59 @@ export class CommercialService {
     });
   }
 
-  async acceptQuote(token: string) {
+  async acceptQuote(token: string, quoteVersion?: number) {
     const booking = await this.byToken(token);
+    return this.acceptForBooking(
+      booking.id,
+      null,
+      async (_tx, current) => {
+        if (current.accessTokenHash !== tokenHash(token)) throw missing('Commercial booking');
+      },
+      quoteVersion,
+    );
+  }
+
+  async acceptForBooking(
+    id: string,
+    actorId: string | null,
+    authorize: BookingAuthorization,
+    quoteVersion?: number,
+  ) {
     return this.db.transaction(async (tx) => {
       const [locked] = await tx
         .select()
         .from(commercialBookings)
-        .where(eq(commercialBookings.id, booking.id))
+        .where(eq(commercialBookings.id, id))
         .for('update');
-      if (!locked || locked.status !== 'QUOTED')
+      if (!locked) throw missing('Commercial booking');
+      await authorize(tx, locked);
+      if (locked.status !== 'QUOTED')
         throw conflict('QUOTE_NOT_ACCEPTABLE', 'Quote cannot be accepted');
       const [quote] = await tx
         .select()
         .from(commercialQuotes)
-        .where(eq(commercialQuotes.bookingId, booking.id))
+        .where(eq(commercialQuotes.bookingId, id))
         .orderBy(desc(commercialQuotes.version))
         .limit(1);
       if (!quote || (quote.expiresOn && quote.expiresOn < today()))
         throw conflict('QUOTE_EXPIRED', 'Quote has expired');
+      if (quoteVersion !== undefined && quote.version !== quoteVersion)
+        throw conflict('QUOTE_VERSION_CHANGED', 'The quote has changed; review the latest version');
+      if (quote.pricing && quoteVersion === undefined)
+        throw conflict('QUOTE_VERSION_REQUIRED', 'Specify the quote version you reviewed');
       if (quote.acceptedAt) return quote;
       const [accepted] = await tx
         .update(commercialQuotes)
         .set({ acceptedAt: new Date() })
         .where(eq(commercialQuotes.id, quote.id))
         .returning();
+      await audit(
+        tx,
+        actorId ?? locked.createdBy,
+        actorId ? 'CUSTOMER_QUOTE_ACCEPTED' : 'LINK_QUOTE_ACCEPTED',
+        'commercial_quote',
+        quote.id,
+      );
       return accepted!;
     });
   }
@@ -405,6 +782,8 @@ export class CommercialService {
         .limit(1);
       if (!quote?.acceptedAt)
         throw conflict('QUOTE_NOT_ACCEPTED', 'Customer must accept the latest quote first');
+      if (booking.status !== 'QUOTED')
+        throw conflict('BOOKING_NOT_INVOICEABLE', 'Only quoted bookings can link an invoice');
       const invoiceRows = await tx
         .select()
         .from(invoices)
@@ -436,6 +815,50 @@ export class CommercialService {
         throw invalid(
           'Invoice company, customer, category and total must match the accepted quote',
         );
+      }
+      if (quote.pricing) {
+        const lines = await tx
+          .select()
+          .from(invoiceLines)
+          .where(eq(invoiceLines.invoiceId, invoice.id))
+          .orderBy(asc(invoiceLines.position));
+        const taxes = lines.length
+          ? await tx
+              .select()
+              .from(invoiceLineTaxes)
+              .where(
+                inArray(
+                  invoiceLineTaxes.lineId,
+                  lines.map((l) => l.id),
+                ),
+              )
+          : [];
+        const agreed = quote.pricing.lines.map((l) => ({
+          ...l,
+          taxes: [...l.taxes].sort((a, b) => a.component.localeCompare(b.component)),
+        }));
+        const actual = lines.map((l) => ({
+          position: l.position,
+          description: l.description,
+          amount: l.amount,
+          taxTreatment: l.taxTreatment,
+          taxAmount: l.taxAmount,
+          total: l.total,
+          taxes: taxes
+            .filter((t) => t.lineId === l.id)
+            .map((t) => ({
+              ruleId: t.ruleId,
+              component: t.component,
+              rate: t.rate,
+              amount: t.amount,
+            }))
+            .sort((a, b) => a.component.localeCompare(b.component)),
+        }));
+        if (requestHash(agreed) !== requestHash(actual))
+          throw conflict(
+            'QUOTE_PRICING_REVIEW_REQUIRED',
+            'Invoice line and tax details must match the accepted quote',
+          );
       }
       const [updated] = await tx
         .update(commercialBookings)
@@ -544,6 +967,20 @@ export class CommercialService {
         .where(eq(paymentMilestones.bookingId, id));
       if (existing.length)
         throw conflict('SCHEDULE_ALREADY_SET', 'Payment schedule is already set');
+      const [quote] = await tx
+        .select()
+        .from(commercialQuotes)
+        .where(eq(commercialQuotes.bookingId, id))
+        .orderBy(desc(commercialQuotes.version))
+        .limit(1);
+      if (
+        quote?.proposedPlan &&
+        requestHash(schedule) !== requestHash(quote.proposedPlan.milestones)
+      )
+        throw conflict(
+          'AGREED_PAYMENT_TERMS_CHANGED',
+          'Use the exact accepted payment plan; changed terms require a quote revision before invoice linking',
+        );
       const rows = await tx
         .insert(paymentMilestones)
         .values(
@@ -560,15 +997,56 @@ export class CommercialService {
   }
 
   async checkout(token: string, milestoneId: string) {
+    const booking = await this.byToken(token);
+    return this.checkoutForBooking(
+      booking.id,
+      null,
+      async (_tx, current) => {
+        if (current.accessTokenHash !== tokenHash(token)) throw missing('Commercial booking');
+      },
+      milestoneId,
+    );
+  }
+
+  async checkoutForBooking(
+    id: string,
+    actorId: string | null,
+    authorize: BookingAuthorization,
+    milestoneId: string,
+  ) {
     if (!this.provider)
       throw new AppError({
         code: 'PAYMENTS_UNAVAILABLE',
         message: 'Online payments are not configured',
         statusCode: 503,
       });
-    const booking = await this.byToken(token);
+    const booking = await this.requireBooking(id);
+    await authorize(this.db, booking);
     if (!booking.invoiceId || !['INVOICED', 'CONFIRMED'].includes(booking.status))
       throw conflict('BOOKING_NOT_PAYABLE', 'Booking is not payable');
+    const previous = await this.db
+      .select({ providerOrderId: paymentOrders.providerOrderId, status: paymentOrders.status })
+      .from(paymentOrders)
+      .innerJoin(paymentMilestones, eq(paymentMilestones.id, paymentOrders.milestoneId))
+      .where(
+        and(
+          eq(paymentMilestones.bookingId, booking.id),
+          inArray(paymentOrders.status, ['CREATING', 'READY', 'EXPIRED', 'TERMINATED']),
+        ),
+      );
+    for (const order of previous) {
+      const result = await this.reconcile(order.providerOrderId);
+      if (result.hasUnresolvedAttempts)
+        throw conflict(
+          'PAYMENT_ATTEMPT_PENDING',
+          'An earlier payment is still being confirmed; wait before paying again',
+        );
+      if (result.orderStatus === 'READY' && !result.canRetry)
+        throw conflict(
+          'PAYMENT_ORDER_UNAVAILABLE',
+          'The checkout session cannot be reused; wait for verification or contact staff',
+        );
+    }
     const invoice = await this.billing.get(booking.invoiceId);
     if (invoice.status !== 'ISSUED') throw conflict('INVOICE_NOT_ISSUED', 'Invoice is not issued');
     const [milestone] = await this.db
@@ -592,7 +1070,21 @@ export class CommercialService {
             paymentOrders.milestoneId,
             milestones.map((item) => item.id),
           ),
-          eq(paymentOrders.status, 'REVIEW_REQUIRED'),
+          or(
+            eq(paymentOrders.status, 'REVIEW_REQUIRED'),
+            sql`exists (select 1 from ${paymentAttempts} a join ${receipts} r on r.id = a.receipt_id where a.order_id = ${paymentOrders.id} and a.status = 'SUCCESS' and a.accounting_status <> 'REFUNDED' and r.status = 'REVERSED')`,
+            exists(
+              this.db
+                .select({ id: paymentAttempts.id })
+                .from(paymentAttempts)
+                .where(
+                  and(
+                    eq(paymentAttempts.orderId, paymentOrders.id),
+                    eq(paymentAttempts.accountingStatus, 'REVIEW_REQUIRED'),
+                  ),
+                ),
+            ),
+          ),
         ),
       );
     if (reviewOrders.length)
@@ -621,7 +1113,43 @@ export class CommercialService {
         .from(commercialBookings)
         .where(eq(commercialBookings.id, booking.id))
         .for('share');
-      if (!currentBooking || !['INVOICED', 'CONFIRMED'].includes(currentBooking.status))
+      if (!currentBooking) throw missing('Commercial booking');
+      await authorize(tx, currentBooking);
+      const blockedAttempts = await tx
+        .select({
+          status: paymentAttempts.status,
+          accountingStatus: paymentAttempts.accountingStatus,
+        })
+        .from(paymentAttempts)
+        .innerJoin(paymentOrders, eq(paymentOrders.id, paymentAttempts.orderId))
+        .innerJoin(paymentMilestones, eq(paymentMilestones.id, paymentOrders.milestoneId))
+        .where(
+          and(
+            eq(paymentMilestones.bookingId, booking.id),
+            or(
+              inArray(paymentAttempts.status, ['PENDING', 'UNKNOWN']),
+              eq(paymentAttempts.accountingStatus, 'REVIEW_REQUIRED'),
+              sql`(${paymentAttempts.status} = 'SUCCESS' and ${paymentAttempts.accountingStatus} <> 'REFUNDED' and exists (select 1 from ${receipts} r where r.id = ${paymentAttempts.receiptId} and r.status = 'REVERSED'))`,
+            ),
+          ),
+        );
+      if (
+        blockedAttempts.some(
+          (attempt) =>
+            attempt.accountingStatus === 'REVIEW_REQUIRED' ||
+            attempt.accountingStatus === 'APPLIED',
+        )
+      )
+        throw conflict(
+          'PAYMENT_REVIEW_REQUIRED',
+          'A payment needs staff review before another checkout',
+        );
+      if (blockedAttempts.length)
+        throw conflict(
+          'PAYMENT_ATTEMPT_PENDING',
+          'An earlier payment is still being confirmed; wait before paying again',
+        );
+      if (!['INVOICED', 'CONFIRMED'].includes(currentBooking.status))
         throw conflict('BOOKING_NOT_PAYABLE', 'Booking is not payable');
       await tx
         .select()
@@ -671,6 +1199,14 @@ export class CommercialService {
           amount: decimal(currentRemaining),
         })
         .returning();
+      await enqueuePaymentReconciliation(tx, created!.id);
+      await audit(
+        tx,
+        actorId ?? booking.createdBy,
+        actorId ? 'CUSTOMER_CHECKOUT_CREATED' : 'LINK_CHECKOUT_CREATED',
+        'payment_order',
+        created!.id,
+      );
       return created!;
     });
     if (order.status === 'READY') {
@@ -703,7 +1239,74 @@ export class CommercialService {
     };
   }
 
-  async reconcile(providerOrderId: string) {
+  /** Retry creation with the same gateway ID after a timeout or process restart. */
+  async recoverCreatingOrder(providerOrderId: string) {
+    const [order] = await this.db
+      .select()
+      .from(paymentOrders)
+      .where(eq(paymentOrders.providerOrderId, providerOrderId));
+    if (!order || order.status !== 'CREATING') return;
+    const [milestone] = await this.db
+      .select()
+      .from(paymentMilestones)
+      .where(eq(paymentMilestones.id, order.milestoneId));
+    const booking = await this.requireBooking(milestone!.bookingId);
+    if (!this.provider) throw missing('Payment provider');
+    if (!['INVOICED', 'CONFIRMED'].includes(booking.status)) {
+      await this.db
+        .update(paymentOrders)
+        .set({
+          status: 'TERMINATED',
+          providerStatus: 'NOT_CREATED',
+          lastCheckedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(and(eq(paymentOrders.id, order.id), eq(paymentOrders.status, 'CREATING')));
+      return;
+    }
+    const [customer] = await this.db
+      .select()
+      .from(customers)
+      .where(eq(customers.id, booking.customerId));
+    const result = await this.provider.createOrder({
+      orderId: providerOrderId,
+      amount: order.amount,
+      customerId: booking.customerId,
+      customerName: customer!.name,
+      customerPhone: (customer!.mobileNumber ?? customer!.phone ?? '')
+        .replace(/\D/g, '')
+        .slice(-10),
+      ...(customer?.email ? { customerEmail: customer.email } : {}),
+    });
+    await this.db
+      .update(paymentOrders)
+      .set({ sessionId: result.sessionId, status: 'READY', updatedAt: new Date() })
+      .where(and(eq(paymentOrders.id, order.id), eq(paymentOrders.status, 'CREATING')));
+  }
+
+  async receivePaymentWebhook(providerOrderId: string, eventKey: string) {
+    if (!this.provider) throw missing('Payment provider');
+    await this.db.transaction(async (tx) => {
+      const [order] = await tx
+        .select()
+        .from(paymentOrders)
+        .where(
+          and(
+            eq(paymentOrders.provider, this.provider!.name),
+            eq(paymentOrders.providerOrderId, providerOrderId),
+          ),
+        );
+      if (!order) throw missing('Payment order');
+      const inserted = await tx
+        .insert(paymentWebhookEvents)
+        .values({ provider: this.provider!.name, eventKey, orderId: order.id })
+        .onConflictDoNothing()
+        .returning({ id: paymentWebhookEvents.id });
+      if (inserted.length) await enqueuePaymentReconciliation(tx, order.id);
+    });
+  }
+
+  async reconcile(providerOrderId: string, scheduleFollowUp = true) {
     if (!this.provider)
       throw new AppError({
         code: 'PAYMENTS_UNAVAILABLE',
@@ -720,84 +1323,335 @@ export class CommercialService {
         ),
       );
     if (!order) throw missing('Payment order');
-    if (order.status === 'PAID') return { status: 'PAID', receiptId: order.receiptId };
-    if (order.status === 'REVIEW_REQUIRED') return { status: 'REVIEW_REQUIRED', receiptId: null };
-    const payment = await this.provider.successfulPayment(providerOrderId);
-    if (!payment) return { status: 'PENDING', receiptId: null };
+    if (scheduleFollowUp) await enqueuePaymentReconciliation(this.db, order.id);
+    if (order.status === 'TERMINATED' && order.providerStatus === 'NOT_CREATED')
+      return this.paymentResult(this.db, order);
+    const [observation] = await this.db
+      .select({ startedAt: sql<Date>`clock_timestamp()` })
+      .from(paymentOrders)
+      .where(eq(paymentOrders.id, order.id));
+    const startedAt = new Date(observation!.startedAt);
+    // Use the database clock so multiple hosts agree on observation ordering.
+    // No network requests while holding database locks.
+    let snapshot;
+    try {
+      snapshot = await this.provider.inspectOrder(providerOrderId);
+    } catch (error) {
+      if (
+        !(error instanceof AppError) ||
+        error.code !== 'PAYMENT_PROVIDER_ORDER_NOT_FOUND' ||
+        order.status !== 'CREATING'
+      )
+        throw error;
+      await this.recoverCreatingOrder(providerOrderId);
+      const [recovered] = await this.db
+        .select()
+        .from(paymentOrders)
+        .where(eq(paymentOrders.id, order.id));
+      if (recovered!.status === 'TERMINATED') return this.paymentResult(this.db, recovered!);
+      snapshot = await this.provider.inspectOrder(providerOrderId);
+    }
     return this.db.transaction(async (tx) => {
-      // The provider call stays outside the transaction. A row lock serializes
-      // callbacks/retries, and receipt creation plus order linking commit together.
       const [locked] = await tx
         .select()
         .from(paymentOrders)
         .where(eq(paymentOrders.id, order.id))
         .for('update');
-      if (locked!.status === 'PAID') return { status: 'PAID', receiptId: locked!.receiptId };
-      if (locked!.status === 'REVIEW_REQUIRED')
-        return { status: 'REVIEW_REQUIRED', receiptId: null };
-      const markReview = async () => {
-        await tx
-          .update(paymentOrders)
-          .set({
-            status: 'REVIEW_REQUIRED',
-            providerPaymentId: payment.paymentId,
-            paidAt: new Date(payment.receivedAt),
-            updatedAt: new Date(),
+      if (!locked) throw missing('Payment order');
+      if (locked.snapshotStartedAt && locked.snapshotStartedAt > startedAt)
+        return this.paymentResult(tx, locked);
+      const now = new Date();
+      for (const attempt of snapshot.attempts) {
+        const preserveTerminal = sql`${paymentAttempts.status} = 'SUCCESS' OR (${paymentAttempts.status} NOT IN ('PENDING','UNKNOWN','NOT_ATTEMPTED') AND ${attempt.status} IN ('PENDING','UNKNOWN','NOT_ATTEMPTED'))`;
+        const [saved] = await tx
+          .insert(paymentAttempts)
+          .values({
+            orderId: order.id,
+            provider: this.provider!.name,
+            providerPaymentId: attempt.paymentId,
+            status: attempt.status,
+            rawStatus: attempt.rawStatus,
+            amount: attempt.amount,
+            currency: attempt.currency,
+            initiatedAt: new Date(attempt.initiatedAt),
+            completedAt: attempt.completedAt ? new Date(attempt.completedAt) : null,
+            failureCode: attempt.failureCode,
+            failureMessage: attempt.failureMessage,
+            accountingStatus:
+              locked.status === 'PAID' &&
+              locked.providerPaymentId === attempt.paymentId &&
+              locked.receiptId
+                ? 'APPLIED'
+                : 'UNAPPLIED',
+            receiptId:
+              locked.status === 'PAID' && locked.providerPaymentId === attempt.paymentId
+                ? locked.receiptId
+                : null,
           })
-          .where(eq(paymentOrders.id, order.id));
-        return { status: 'REVIEW_REQUIRED', receiptId: null };
-      };
-      if (payment.currency !== 'INR' || minor(payment.amount) !== minor(locked!.amount))
-        return markReview();
-      const [milestone] = await tx
-        .select()
-        .from(paymentMilestones)
-        .where(eq(paymentMilestones.id, locked!.milestoneId));
-      const [booking] = await tx
-        .select()
-        .from(commercialBookings)
-        .where(eq(commercialBookings.id, milestone!.bookingId))
-        .for('update');
-      if (!booking?.invoiceId) throw conflict('INVOICE_MISSING', 'Booking has no invoice');
-      if (!['INVOICED', 'CONFIRMED'].includes(booking.status)) return markReview();
-      let receipt;
-      try {
-        receipt = await this.billing.createReceiptInTransaction(
-          tx,
-          {
-            invoiceId: booking.invoiceId,
-            amount: payment.amount,
-            receivedDate: payment.receivedAt.slice(0, 10),
-            method: 'GATEWAY',
-            details: { reference: `${this.provider!.name}:${payment.paymentId}` },
-            status: 'CONFIRMED',
-          },
-          `gw_${createHash('sha256').update(`${this.provider!.name}:${payment.paymentId}`).digest('hex')}`,
-          booking.createdBy,
-        );
-      } catch (error) {
-        if (
-          error instanceof AppError &&
-          ['OVERPAYMENT', 'INVOICE_NOT_ISSUED', 'CORE_VALIDATION_FAILED'].includes(error.code)
-        )
-          return markReview();
-        throw error;
+          .onConflictDoUpdate({
+            target: [paymentAttempts.provider, paymentAttempts.providerPaymentId],
+            set: {
+              // A stale pending/failure result cannot erase a verified success.
+              status: sql`CASE WHEN ${preserveTerminal} THEN ${paymentAttempts.status} ELSE ${attempt.status} END`,
+              rawStatus: sql`CASE WHEN ${preserveTerminal} THEN ${paymentAttempts.rawStatus} ELSE ${attempt.rawStatus} END`,
+              amount: sql`CASE WHEN ${preserveTerminal} THEN ${paymentAttempts.amount} ELSE ${attempt.amount}::numeric END`,
+              currency: sql`CASE WHEN ${preserveTerminal} THEN ${paymentAttempts.currency} ELSE ${attempt.currency} END`,
+              completedAt: sql`CASE WHEN ${preserveTerminal} THEN ${paymentAttempts.completedAt} ELSE coalesce(${attempt.completedAt}::timestamptz, ${paymentAttempts.completedAt}) END`,
+              failureCode: sql`CASE WHEN ${preserveTerminal} THEN ${paymentAttempts.failureCode} ELSE ${attempt.failureCode} END`,
+              failureMessage: sql`CASE WHEN ${preserveTerminal} THEN ${paymentAttempts.failureMessage} ELSE ${attempt.failureMessage} END`,
+              updatedAt: now,
+            },
+            setWhere: eq(paymentAttempts.orderId, order.id),
+          })
+          .returning();
+        if (!saved) throw invalid('Provider payment belongs to a different order');
       }
-      // An idempotency replay can return an existing receipt; only a confirmed
-      // receipt is eligible to complete an order. Balances always come from billing.
-      if (receipt.status !== 'CONFIRMED') return markReview();
-      await tx
+      const attempts = await tx
+        .select()
+        .from(paymentAttempts)
+        .where(eq(paymentAttempts.orderId, order.id));
+      let status =
+        locked.status === 'CREATING' && snapshot.status === 'ACTIVE' && snapshot.sessionId
+          ? 'READY'
+          : locked.status;
+      let receiptId = locked.receiptId;
+      let providerPaymentId = locked.providerPaymentId;
+      let paidAt = locked.paidAt;
+      let reviewRequiredAt = locked.reviewRequiredAt;
+      let requiresAccountingReview =
+        attempts.some((attempt) => attempt.accountingStatus === 'REVIEW_REQUIRED') ||
+        status === 'REVIEW_REQUIRED';
+      for (const payment of attempts.filter(
+        (item) => item.status === 'SUCCESS' && item.accountingStatus === 'UNAPPLIED',
+      )) {
+        const receivedAt = payment.completedAt ?? payment.initiatedAt;
+        const reasons: ReviewReason[] = [];
+        if (status === 'REVIEW_REQUIRED')
+          reasons.push({ code: 'ORDER_ALREADY_UNDER_REVIEW', details: {} });
+        if (status === 'PAID' || status === 'REFUNDED' || receiptId)
+          reasons.push({ code: 'ADDITIONAL_SUCCESS', details: {} });
+        if (payment.currency !== 'INR')
+          reasons.push({
+            code: 'CURRENCY_MISMATCH',
+            details: { expected: 'INR', actual: payment.currency },
+          });
+        if (minor(payment.amount) !== minor(locked.amount))
+          reasons.push({
+            code: 'AMOUNT_MISMATCH',
+            details: { expected: locked.amount, actual: payment.amount },
+          });
+        let review = reasons.length > 0;
+        let receipt:
+          Awaited<ReturnType<BillingRepository['createReceiptInTransaction']>> | undefined;
+        if (!review) {
+          const [milestone] = await tx
+            .select()
+            .from(paymentMilestones)
+            .where(eq(paymentMilestones.id, locked.milestoneId));
+          const [booking] = await tx
+            .select()
+            .from(commercialBookings)
+            .where(eq(commercialBookings.id, milestone!.bookingId))
+            .for('update');
+          if (!booking?.invoiceId || !['INVOICED', 'CONFIRMED'].includes(booking.status)) {
+            review = true;
+            reasons.push({
+              code: !booking
+                ? 'BOOKING_MISSING'
+                : !booking.invoiceId
+                  ? 'INVOICE_MISSING'
+                  : 'BOOKING_INELIGIBLE',
+              details: {},
+            });
+          } else {
+            try {
+              receipt = await this.billing.createReceiptInTransaction(
+                tx,
+                {
+                  invoiceId: booking.invoiceId,
+                  amount: payment.amount,
+                  receivedDate: new Date(receivedAt.getTime() + 330 * 60000)
+                    .toISOString()
+                    .slice(0, 10),
+                  method: 'GATEWAY',
+                  details: { reference: `${this.provider!.name}:${payment.providerPaymentId}` },
+                  status: 'CONFIRMED',
+                },
+                `gw_${createHash('sha256').update(`${this.provider!.name}:${payment.providerPaymentId}`).digest('hex')}`,
+                booking.createdBy,
+              );
+              if (receipt.status !== 'CONFIRMED') {
+                review = true;
+                reasons.push({ code: 'RECEIPT_NOT_CONFIRMED', details: { receiptId: receipt.id } });
+              }
+            } catch (error) {
+              if (
+                error instanceof AppError &&
+                [
+                  'OVERPAYMENT',
+                  'INVOICE_NOT_ISSUED',
+                  'CORE_VALIDATION_FAILED',
+                  'IDEMPOTENCY_CONFLICT',
+                ].includes(error.code)
+              ) {
+                review = true;
+                const code =
+                  error.code === 'OVERPAYMENT'
+                    ? 'OVERPAYMENT'
+                    : error.code === 'INVOICE_NOT_ISSUED'
+                      ? 'INVOICE_NOT_ISSUED'
+                      : error.code === 'IDEMPOTENCY_CONFLICT'
+                        ? 'RECEIPT_IDEMPOTENCY_CONFLICT'
+                        : 'RECEIPT_VALIDATION_FAILED';
+                reasons.push({ code, details: { errorCode: error.code } });
+              } else throw error;
+            }
+          }
+        }
+        await tx
+          .update(paymentAttempts)
+          .set({
+            accountingStatus: review ? 'REVIEW_REQUIRED' : 'APPLIED',
+            reviewReasons: reasons,
+            receiptId: review ? null : receipt!.id,
+            updatedAt: now,
+          })
+          .where(eq(paymentAttempts.id, payment.id));
+        if (review) {
+          requiresAccountingReview = true;
+          reviewRequiredAt ??= now;
+          providerPaymentId ??= payment.providerPaymentId;
+          paidAt ??= receivedAt;
+          // Preserve an existing receipt; expose extra money as an attempt for review.
+          if (status !== 'PAID') status = 'REVIEW_REQUIRED';
+        } else {
+          status = 'PAID';
+          receiptId = receipt!.id;
+          providerPaymentId = payment.providerPaymentId;
+          paidAt = receivedAt;
+        }
+      }
+      const unresolved =
+        attempts.some((item) => ['PENDING', 'UNKNOWN'].includes(item.status)) ||
+        snapshot.status === 'UNKNOWN' ||
+        snapshot.status === 'TERMINATION_REQUESTED' ||
+        (snapshot.status === 'PAID' && !attempts.some((item) => item.status === 'SUCCESS'));
+      if (!unresolved && !requiresAccountingReview) reviewRequiredAt = null;
+      if (
+        unresolved &&
+        now.getTime() - locked.createdAt.getTime() > this.pendingReviewAfterHours * 3600000
+      )
+        reviewRequiredAt ??= now;
+      if (!['PAID', 'REVIEW_REQUIRED', 'REFUNDED'].includes(status)) {
+        if (snapshot.status === 'EXPIRED') status = 'EXPIRED';
+        else if (snapshot.status === 'TERMINATED') status = 'TERMINATED';
+      }
+      const [updated] = await tx
         .update(paymentOrders)
         .set({
-          status: 'PAID',
-          providerPaymentId: payment.paymentId,
-          paidAt: new Date(payment.receivedAt),
-          receiptId: receipt.id,
-          updatedAt: new Date(),
+          status,
+          receiptId,
+          providerPaymentId,
+          paidAt,
+          sessionId: snapshot.sessionId ?? locked.sessionId,
+          providerStatus: snapshot.rawStatus,
+          expiresAt: snapshot.expiresAt ? new Date(snapshot.expiresAt) : null,
+          lastCheckedAt: now,
+          snapshotStartedAt: startedAt,
+          reviewRequiredAt,
+          updatedAt: now,
         })
-        .where(eq(paymentOrders.id, order.id));
-      return { status: 'PAID', receiptId: receipt.id };
+        .where(eq(paymentOrders.id, order.id))
+        .returning();
+      return this.paymentResult(tx, updated!);
     });
+  }
+
+  async reconcileById(id: string) {
+    const [order] = await this.db
+      .select({ reference: paymentOrders.providerOrderId })
+      .from(paymentOrders)
+      .where(eq(paymentOrders.id, id));
+    if (!order) throw missing('Payment order');
+    return this.reconcile(order.reference);
+  }
+
+  private async paymentResult(tx: CoreTransaction, order: typeof paymentOrders.$inferSelect) {
+    const attempts = await tx
+      .select()
+      .from(paymentAttempts)
+      .where(eq(paymentAttempts.orderId, order.id))
+      .orderBy(desc(paymentAttempts.initiatedAt), desc(paymentAttempts.providerPaymentId));
+    const hasUnresolvedAttempts =
+      attempts.some((item) => ['PENDING', 'UNKNOWN'].includes(item.status)) ||
+      order.providerStatus === 'TERMINATION_REQUESTED' ||
+      (order.providerStatus === 'PAID' && !attempts.some((item) => item.status === 'SUCCESS')) ||
+      (order.providerStatus !== null &&
+        !['ACTIVE', 'PAID', 'EXPIRED', 'TERMINATED', 'NOT_CREATED'].includes(order.providerStatus));
+    const latest = attempts[0];
+    const linkedIds = [
+      ...new Set(
+        [order.receiptId, ...attempts.map((a) => a.receiptId)].filter((id): id is string => !!id),
+      ),
+    ];
+    const linkedReceipts = linkedIds.length
+      ? await tx
+          .select({ id: receipts.id, status: receipts.status })
+          .from(receipts)
+          .where(inArray(receipts.id, linkedIds))
+      : [];
+    const reversedWithoutRefund = attempts.some(
+      (a) =>
+        a.status === 'SUCCESS' &&
+        a.accountingStatus !== 'REFUNDED' &&
+        linkedReceipts.some(
+          (r) =>
+            r.status === 'REVERSED' &&
+            (r.id === a.receiptId ||
+              (a.providerPaymentId === order.providerPaymentId && r.id === order.receiptId)),
+        ),
+    );
+    const accountingStatus =
+      reversedWithoutRefund ||
+      attempts.some((item) => item.accountingStatus === 'REVIEW_REQUIRED') ||
+      order.status === 'REVIEW_REQUIRED'
+        ? 'REVIEW_REQUIRED'
+        : order.status === 'REFUNDED'
+          ? 'REFUNDED'
+          : order.receiptId
+            ? 'APPLIED'
+            : 'UNAPPLIED';
+    const status =
+      accountingStatus === 'REVIEW_REQUIRED'
+        ? 'REVIEW_REQUIRED'
+        : order.status === 'PAID'
+          ? 'PAID'
+          : order.status === 'REFUNDED'
+            ? 'REFUNDED'
+            : hasUnresolvedAttempts
+              ? 'PENDING'
+              : ['EXPIRED', 'TERMINATED'].includes(order.status)
+                ? order.status
+                : latest?.status === 'SUCCESS'
+                  ? 'PENDING'
+                  : (latest?.status ?? 'PENDING');
+    return {
+      status,
+      receiptId: order.receiptId,
+      orderStatus: order.status,
+      latestAttemptStatus: latest?.status ?? 'NOT_ATTEMPTED',
+      accountingStatus,
+      hasUnresolvedAttempts,
+      canRetry:
+        ((order.status === 'READY' &&
+          order.providerStatus === 'ACTIVE' &&
+          (!order.expiresAt || order.expiresAt > new Date())) ||
+          (['EXPIRED', 'TERMINATED'].includes(order.status) &&
+            order.providerStatus !== 'NOT_CREATED')) &&
+        !hasUnresolvedAttempts &&
+        accountingStatus !== 'REVIEW_REQUIRED',
+      lastCheckedAt: order.lastCheckedAt?.toISOString() ?? null,
+    };
   }
 
   async reconcileForToken(token: string, providerOrderId: string) {

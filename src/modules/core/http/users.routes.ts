@@ -79,7 +79,10 @@ export const userRoutes: FastifyPluginAsyncTypebox<{ services: CoreServices }> =
     {
       schema: {
         tags: ['core users'],
-        querystring: Type.Omit(querySchema, ['status']),
+        querystring: Type.Object(
+          { ...querySchema.properties, status: Type.Optional(status) },
+          { additionalProperties: false },
+        ),
         response: {
           200: Type.Object({
             data: Type.Array(safeUser),
@@ -95,7 +98,12 @@ export const userRoutes: FastifyPluginAsyncTypebox<{ services: CoreServices }> =
     async (request) => {
       const page = request.query.page ?? 1,
         pageSize = request.query.pageSize ?? 25;
-      const result = await services.identity.listUsers(page, pageSize);
+      const result = await services.identity.listUsers(
+        page,
+        pageSize,
+        request.query.q,
+        request.query.status,
+      );
       return { data: result.items, pagination: { page, pageSize, total: result.total } };
     },
   );

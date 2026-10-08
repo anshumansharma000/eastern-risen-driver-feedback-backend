@@ -1,3 +1,4 @@
+import { textSearch } from '../../../shared/database/search.js';
 import { ensureUnambiguousTaxRule } from './tax-rule-validation.js';
 import { and, asc, count, eq, ilike, sql } from 'drizzle-orm';
 import type { CoreDatabase } from './database.js';
@@ -13,8 +14,21 @@ export class MastersRepository {
     private readonly catalog: SharedCatalog,
   ) {}
 
-  async listCompanies(page: number, pageSize: number, status?: 'ACTIVE' | 'INACTIVE' | 'ARCHIVED') {
-    const filter = status ? eq(tables.companies.status, status) : undefined;
+  async listCompanies(
+    page: number,
+    pageSize: number,
+    status?: 'ACTIVE' | 'INACTIVE' | 'ARCHIVED',
+    q?: string,
+  ) {
+    const filter = and(
+      status ? eq(tables.companies.status, status) : undefined,
+      textSearch(q, [
+        tables.companies.name,
+        tables.companies.phone,
+        tables.companies.mobileNumber,
+        tables.companies.email,
+      ]),
+    );
     const [items, [total]] = await Promise.all([
       this.db
         .select()
@@ -88,8 +102,20 @@ export class MastersRepository {
     page: number,
     pageSize: number,
     status?: 'ACTIVE' | 'INACTIVE' | 'ARCHIVED',
+    q?: string,
+    companyId?: string,
   ) {
-    const filter = status ? eq(tables.bankAccounts.status, status) : undefined;
+    const filter = and(
+      status ? eq(tables.bankAccounts.status, status) : undefined,
+      textSearch(q, [
+        tables.bankAccounts.name,
+        tables.bankAccounts.bankName,
+        tables.bankAccounts.branch,
+        tables.bankAccounts.ifscCode,
+        tables.bankAccounts.swiftCode,
+      ]),
+      companyId ? eq(tables.bankAccounts.companyId, companyId) : undefined,
+    );
     const [items, [total]] = await Promise.all([
       this.db
         .select()
@@ -158,10 +184,10 @@ export class MastersRepository {
     const filter = and(
       status ? eq(tables.customers.status, status) : undefined,
       category ? eq(tables.customers.category, category) : undefined,
-      queryText
+      queryText?.trim()
         ? ilike(
             tables.customers.name,
-            `%${queryText.replace(/[\\%_]/g, (character) => '\\' + character)}%`,
+            `%${queryText.trim().replace(/[\\%_]/g, (character) => '\\' + character)}%`,
           )
         : undefined,
     );
@@ -232,8 +258,22 @@ export class MastersRepository {
     });
   }
 
-  async listGuests(page: number, pageSize: number, status?: 'ACTIVE' | 'INACTIVE' | 'ARCHIVED') {
-    const filter = status ? eq(tables.guests.status, status) : undefined;
+  async listGuests(
+    page: number,
+    pageSize: number,
+    status?: 'ACTIVE' | 'INACTIVE' | 'ARCHIVED',
+    q?: string,
+  ) {
+    const filter = and(
+      status ? eq(tables.guests.status, status) : undefined,
+      textSearch(q, [
+        tables.guests.name,
+        tables.guests.phone,
+        tables.guests.mobileNumber,
+        tables.guests.email,
+        tables.guests.contactPerson,
+      ]),
+    );
     const [items, [total]] = await Promise.all([
       this.db
         .select()
@@ -292,8 +332,23 @@ export class MastersRepository {
     });
   }
 
-  async listHotels(page: number, pageSize: number, status?: 'ACTIVE' | 'INACTIVE' | 'ARCHIVED') {
-    const filter = status ? eq(tables.hotels.status, status) : undefined;
+  async listHotels(
+    page: number,
+    pageSize: number,
+    status?: 'ACTIVE' | 'INACTIVE' | 'ARCHIVED',
+    q?: string,
+  ) {
+    const filter = and(
+      status ? eq(tables.hotels.status, status) : undefined,
+      textSearch(q, [
+        tables.hotels.name,
+        tables.hotels.city,
+        tables.hotels.phone,
+        tables.hotels.mobileNumber,
+        tables.hotels.email,
+        tables.hotels.contactPerson,
+      ]),
+    );
     const [items, [total]] = await Promise.all([
       this.db
         .select()
@@ -354,8 +409,14 @@ export class MastersRepository {
     page: number,
     pageSize: number,
     status?: 'ACTIVE' | 'INACTIVE' | 'ARCHIVED',
+    q?: string,
+    hotelId?: string,
   ) {
-    const filter = status ? eq(tables.hotelRates.status, status) : undefined;
+    const filter = and(
+      status ? eq(tables.hotelRates.status, status) : undefined,
+      textSearch(q, [tables.hotelRates.name, tables.hotelRates.plan]),
+      hotelId ? eq(tables.hotelRates.hotelId, hotelId) : undefined,
+    );
     const [items, [total]] = await Promise.all([
       this.db
         .select()
@@ -422,8 +483,12 @@ export class MastersRepository {
     page: number,
     pageSize: number,
     status?: 'ACTIVE' | 'INACTIVE' | 'ARCHIVED',
+    q?: string,
   ) {
-    const filter = status ? eq(tables.serviceCategories.status, status) : undefined;
+    const filter = and(
+      status ? eq(tables.serviceCategories.status, status) : undefined,
+      textSearch(q, [tables.serviceCategories.name, tables.serviceCategories.code]),
+    );
     const [items, [total]] = await Promise.all([
       this.db
         .select()
@@ -480,8 +545,16 @@ export class MastersRepository {
     });
   }
 
-  async listTaxRules(page: number, pageSize: number, status?: 'ACTIVE' | 'INACTIVE' | 'ARCHIVED') {
-    const filter = status ? eq(tables.taxRules.status, status) : undefined;
+  async listTaxRules(
+    page: number,
+    pageSize: number,
+    status?: 'ACTIVE' | 'INACTIVE' | 'ARCHIVED',
+    q?: string,
+  ) {
+    const filter = and(
+      status ? eq(tables.taxRules.status, status) : undefined,
+      textSearch(q, [tables.taxRules.name, tables.taxRules.component]),
+    );
     const [items, [total]] = await Promise.all([
       this.db
         .select()
@@ -542,8 +615,21 @@ export class MastersRepository {
     page: number,
     pageSize: number,
     status?: 'ACTIVE' | 'INACTIVE' | 'ARCHIVED',
+    q?: string,
+    vendorId?: string,
   ) {
-    const filter = status ? eq(tables.vendorProfiles.status, status) : undefined;
+    const filter = and(
+      status ? eq(tables.vendorProfiles.status, status) : undefined,
+      textSearch(q, [
+        tables.vendorProfiles.address,
+        tables.vendorProfiles.city,
+        tables.vendorProfiles.state,
+        tables.vendorProfiles.country,
+        tables.vendorProfiles.postalCode,
+        tables.vendorProfiles.mobileNumber,
+      ]),
+      vendorId ? eq(tables.vendorProfiles.vendorId, vendorId) : undefined,
+    );
     const [items, [total]] = await Promise.all([
       this.db
         .select()

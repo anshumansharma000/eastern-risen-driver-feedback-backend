@@ -1,4 +1,11 @@
+import {
+  processPaymentReconciliation,
+  startPaymentReconciliationWorker,
+} from './modules/core/application/payment-reconciliation.js';
 import 'dotenv/config';
+import { createCustomerMailSender, deliverCustomerMail } from './modules/customer/customer-mail.js';
+import { startCustomerMailWorker } from './modules/customer/customer-mail-worker.js';
+import { createFieldEncryptor } from './shared/security/field-encryption.js';
 import { buildApp } from './app.js';
 import { loadConfig } from './config/env.js';
 import { loggerRedaction } from './config/logger.js';
@@ -26,6 +33,12 @@ const app = await buildApp({
           transport: { target: 'pino-pretty', options: { colorize: true } },
         }
       : { level: config.logLevel, redact: loggerRedaction },
+});
+
+let stopPaymentWorker: (() => Promise<void>) | undefined;
+let stopCustomerMailWorker: (() => Promise<void>) | undefined;
+app.addHook('onClose', async () => {
+  await Promise.all([stopCustomerMailWorker?.(), stopPaymentWorker?.()]);
 });
 
 const shutdownDeadline = () =>
@@ -62,6 +75,29 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 
 try {
   await app.listen({ host: config.host, port: config.port });
+  if (config.cashfree && config.paymentReconciliationWorkerEnabled) {
+    stopPaymentWorker = startPaymentReconciliationWorker(
+      () =>
+        processPaymentReconciliation(
+          database.db,
+          services.core.commercial,
+          config.paymentClosedRecheckDays,
+        ),
+      app.log,
+      config.paymentReconciliationPollIntervalMs,
+    );
+    app.log.info('Payment reconciliation worker started');
+  }
+  if (config.customerMail && config.customerMailWorkerEnabled) {
+    const send = createCustomerMailSender(config.customerMail);
+    const encryptor = createFieldEncryptor(config.dataEncryptionKey);
+    stopCustomerMailWorker = startCustomerMailWorker(
+      () => deliverCustomerMail(database.db, encryptor, send, 1),
+      app.log,
+      config.customerMailPollIntervalMs,
+    );
+    app.log.info('Customer email delivery worker started');
+  }
 } catch (error) {
   app.log.fatal({ err: error }, 'Failed to start server');
   await database.close();

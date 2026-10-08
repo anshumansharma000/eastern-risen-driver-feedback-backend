@@ -20,6 +20,7 @@ export const querySchema = Type.Object(
     page: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000000 })),
     pageSize: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
     status: Type.Optional(statusSchema),
+    q: Type.Optional(Type.String({ maxLength: 200 })),
   },
   { additionalProperties: false },
 );

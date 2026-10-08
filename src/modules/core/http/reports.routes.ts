@@ -116,6 +116,45 @@ const vehicleInvoiceCsvColumns: CsvColumn[] = [
   { key: 'latestInvoiceDate', header: 'Latest Invoice Date' },
 ];
 
+const paymentCsvColumns: CsvColumn[] = [
+  'id',
+  'source',
+  'amount',
+  'activityAt',
+  'reportDate',
+  'createdAt',
+  'receivedDate',
+  'paidAt',
+  'method',
+  'receiptId',
+  'receiptNumber',
+  'receiptStatus',
+  'receiptAmount',
+  'reversalReason',
+  'paymentOrderId',
+  'gatewayStatus',
+  'provider',
+  'providerOrderId',
+  'providerPaymentId',
+  'providerStatus',
+  'providerConfirmedReviewAmount',
+  'invoiceId',
+  'invoiceNumber',
+  'bookingId',
+  'bookingReference',
+  'companyId',
+  'companyName',
+  'customerId',
+  'customerName',
+  'customerCategory',
+  'serviceCategoryId',
+  'serviceCategoryName',
+  'details',
+  'attempts',
+  'resolutions',
+  'recordedExternalRefundAmount',
+].map((key) => ({ key, header: key }));
+
 function csv(rows: Record<string, unknown>[], columns?: CsvColumn[]) {
   const selectedColumns =
     columns ??
@@ -144,6 +183,42 @@ export const reportRoutes: FastifyPluginAsyncTypebox<{ services: CoreServices }>
   { services },
 ) => {
   app.addHook('preHandler', services.guards.read);
+
+  app.get(
+    '/reports/payments',
+    {
+      schema: {
+        tags: ['core reports'],
+        summary: 'Get manual receipts and gateway orders across all states',
+        querystring: schemas.unifiedPaymentReportQuery,
+        response: { 200: schemas.reportEnvelope },
+      },
+    },
+    async (request) =>
+      envelope(
+        await services.paymentsReport.payments(request.query),
+        request.query,
+        'PAYMENT_ACTIVITY_IST',
+      ),
+  );
+
+  app.get(
+    '/reports/payments/export',
+    {
+      schema: {
+        tags: ['core reports'],
+        summary: 'Export the unified payments report as CSV',
+        querystring: schemas.unifiedPaymentReportQuery,
+      },
+    },
+    async (request, reply) =>
+      sendCsv(
+        reply,
+        (await services.paymentsReport.payments(request.query, true)).items,
+        'payments',
+        paymentCsvColumns,
+      ),
+  );
 
   app.get(
     '/reports/dashboard',

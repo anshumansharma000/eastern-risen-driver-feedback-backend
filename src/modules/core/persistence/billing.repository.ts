@@ -116,7 +116,7 @@ export function normalizeInvoiceSnapshot(invoice: SnapshotSource): InvoiceSnapsh
     }),
   };
 }
-function requestHash(value: unknown): string {
+export function requestHash(value: unknown): string {
   // Stable object-key ordering makes retries independent of JSON property order.
   const canonical = (item: unknown): unknown =>
     Array.isArray(item)
@@ -211,28 +211,29 @@ export class BillingRepository {
     });
   }
   async createDraft(input: InvoiceInput, actorId: string) {
-    const id = await this.db.transaction(async (tx) => {
-      const calculated = await this.prepare(tx, input);
-      const [invoice] = await tx
-        .insert(invoices)
-        .values({
-          companyId: input.companyId,
-          customerId: input.customerId,
-          guestId: input.guestId ?? null,
-          serviceCategoryId: input.serviceCategoryId,
-          vehicleId: input.vehicleId ?? null,
-          invoiceDate: input.invoiceDate,
-          details: input,
-          snapshot: calculated.snapshot,
-          ...invoiceTotals(calculated.lines),
-          createdBy: actorId,
-        })
-        .returning();
-      await this.replaceLines(tx, invoice!.id, calculated.lines);
-      await audit(tx, actorId, 'DRAFT_CREATED', 'invoice', invoice!.id);
-      return invoice!.id;
-    });
+    const id = await this.db.transaction((tx) => this.createDraftInTransaction(tx, input, actorId));
     return this.get(id);
+  }
+  async createDraftInTransaction(tx: Transaction, input: InvoiceInput, actorId: string) {
+    const calculated = await this.prepare(tx, input);
+    const [invoice] = await tx
+      .insert(invoices)
+      .values({
+        companyId: input.companyId,
+        customerId: input.customerId,
+        guestId: input.guestId ?? null,
+        serviceCategoryId: input.serviceCategoryId,
+        vehicleId: input.vehicleId ?? null,
+        invoiceDate: input.invoiceDate,
+        details: input,
+        snapshot: calculated.snapshot,
+        ...invoiceTotals(calculated.lines),
+        createdBy: actorId,
+      })
+      .returning();
+    await this.replaceLines(tx, invoice!.id, calculated.lines);
+    await audit(tx, actorId, 'DRAFT_CREATED', 'invoice', invoice!.id);
+    return invoice!.id;
   }
   async updateDraft(id: string, input: InvoiceInput, version: number, actorId: string) {
     await this.db.transaction(async (tx) => {
@@ -266,89 +267,90 @@ export class BillingRepository {
     return this.get(id);
   }
   async issue(id: string, version: number, actorId: string) {
-    await this.db.transaction(async (tx) => {
-      const invoice = await this.lockInvoice(tx, id);
-      if (invoice.status === 'ISSUED') return invoice;
-      if (invoice.status !== 'DRAFT')
-        throw conflict('INVALID_INVOICE_STATE', 'A cancelled invoice cannot be issued');
-      if (invoice.version !== version)
-        throw conflict('STALE_VERSION', 'Reload the draft before issuing');
-      const prepared = await this.prepare(tx, invoice.details);
-      if (
-        !prepared.snapshot.company.address?.trim() ||
-        !prepared.snapshot.company.state?.trim() ||
-        !prepared.snapshot.company.country?.trim()
-      )
-        throw invalid(
-          'Complete the issuing company address, state and country before issuing a new invoice',
-        );
-      const totals = invoiceTotals(prepared.lines);
-      // A changed rate must be reviewed through a draft update, never silently issued.
-      const oldLines = await tx
-        .select()
-        .from(invoiceLines)
-        .where(eq(invoiceLines.invoiceId, id))
-        .orderBy(asc(invoiceLines.position));
-      const oldTaxes = oldLines.length
-        ? await tx
-            .select()
-            .from(invoiceLineTaxes)
-            .where(
-              inArray(
-                invoiceLineTaxes.lineId,
-                oldLines.map((line) => line.id),
-              ),
-            )
-        : [];
-      const previous = oldLines.map((line) => ({
-        amount: line.amount,
-        taxes: oldTaxes
-          .filter((t) => t.lineId === line.id)
-          .map((t) => ({
-            ruleId: t.ruleId,
-            rate: t.rate,
-            component: t.component,
-            amount: t.amount,
-          }))
-          .sort((a, b) => a.component.localeCompare(b.component)),
-      }));
-      const next = prepared.lines.map((line) => ({
-        amount: line.amount,
-        taxes: line.taxes
-          .map((t) => ({ ...t, rate: t.rate }))
-          .sort((a, b) => a.component.localeCompare(b.component)),
-      }));
-      if (requestHash(previous) !== requestHash(next))
-        throw conflict(
-          'DRAFT_TAXES_CHANGED',
-          'Applicable taxes changed; save and review the draft before issuing',
-        );
-      const year = financialYear(invoice.invoiceDate);
-      const number = await this.nextNumber(tx, invoice.companyId, year, 'I');
-      const [issued] = await tx
-        .update(invoices)
-        .set({
-          ...totals,
-          status: 'ISSUED',
-          invoiceNumber: number,
-          financialYear: year,
-          snapshot: prepared.snapshot,
-          issuedAt: new Date(),
-          version: version + 1,
-          updatedAt: new Date(),
-        })
-        .where(eq(invoices.id, id))
-        .returning();
-      await this.replaceLines(tx, id, prepared.lines);
-      await audit(tx, actorId, 'ISSUED', 'invoice', id);
-      await tx.insert(coreOutbox).values({
-        eventType: 'core.invoice.issued.v1',
-        aggregateId: id,
-        payload: { invoiceId: id, invoiceNumber: number, companyId: invoice.companyId },
-      });
-      return issued!;
-    });
+    await this.db.transaction((tx) => this.issueInTransaction(tx, id, version, actorId));
     return this.get(id);
+  }
+  async issueInTransaction(tx: Transaction, id: string, version: number, actorId: string) {
+    const invoice = await this.lockInvoice(tx, id);
+    if (invoice.status === 'ISSUED') return invoice;
+    if (invoice.status !== 'DRAFT')
+      throw conflict('INVALID_INVOICE_STATE', 'A cancelled invoice cannot be issued');
+    if (invoice.version !== version)
+      throw conflict('STALE_VERSION', 'Reload the draft before issuing');
+    const prepared = await this.prepare(tx, invoice.details);
+    if (
+      !prepared.snapshot.company.address?.trim() ||
+      !prepared.snapshot.company.state?.trim() ||
+      !prepared.snapshot.company.country?.trim()
+    )
+      throw invalid(
+        'Complete the issuing company address, state and country before issuing a new invoice',
+      );
+    const totals = invoiceTotals(prepared.lines);
+    // A changed rate must be reviewed through a draft update, never silently issued.
+    const oldLines = await tx
+      .select()
+      .from(invoiceLines)
+      .where(eq(invoiceLines.invoiceId, id))
+      .orderBy(asc(invoiceLines.position));
+    const oldTaxes = oldLines.length
+      ? await tx
+          .select()
+          .from(invoiceLineTaxes)
+          .where(
+            inArray(
+              invoiceLineTaxes.lineId,
+              oldLines.map((line) => line.id),
+            ),
+          )
+      : [];
+    const previous = oldLines.map((line) => ({
+      amount: line.amount,
+      taxes: oldTaxes
+        .filter((t) => t.lineId === line.id)
+        .map((t) => ({
+          ruleId: t.ruleId,
+          rate: t.rate,
+          component: t.component,
+          amount: t.amount,
+        }))
+        .sort((a, b) => a.component.localeCompare(b.component)),
+    }));
+    const next = prepared.lines.map((line) => ({
+      amount: line.amount,
+      taxes: line.taxes
+        .map((t) => ({ ...t, rate: t.rate }))
+        .sort((a, b) => a.component.localeCompare(b.component)),
+    }));
+    if (requestHash(previous) !== requestHash(next))
+      throw conflict(
+        'DRAFT_TAXES_CHANGED',
+        'Applicable taxes changed; save and review the draft before issuing',
+      );
+    const year = financialYear(invoice.invoiceDate);
+    const number = await this.nextNumber(tx, invoice.companyId, year, 'I');
+    const [issued] = await tx
+      .update(invoices)
+      .set({
+        ...totals,
+        status: 'ISSUED',
+        invoiceNumber: number,
+        financialYear: year,
+        snapshot: prepared.snapshot,
+        issuedAt: new Date(),
+        version: version + 1,
+        updatedAt: new Date(),
+      })
+      .where(eq(invoices.id, id))
+      .returning();
+    await this.replaceLines(tx, id, prepared.lines);
+    await audit(tx, actorId, 'ISSUED', 'invoice', id);
+    await tx.insert(coreOutbox).values({
+      eventType: 'core.invoice.issued.v1',
+      aggregateId: id,
+      payload: { invoiceId: id, invoiceNumber: number, companyId: invoice.companyId },
+    });
+    return issued!;
   }
   async cancel(id: string, reason: string, actorId: string) {
     if (!reason.trim()) throw invalid('Cancellation reason is required');
@@ -413,10 +415,6 @@ export class BillingRepository {
     }
     const invoice = await this.lockInvoice(tx, input.invoiceId);
     this.requireIssued(invoice);
-    if (input.receivedDate < invoice.invoiceDate)
-      throw invalid(
-        'Receipt date cannot precede the invoice date; advance payments require a separate workflow',
-      );
     if (input.status === 'CONFIRMED') await this.checkSettlement(tx, invoice, input.amount);
     const year = financialYear(input.receivedDate),
       number = await this.nextNumber(tx, invoice.companyId, year, 'R');
@@ -543,6 +541,45 @@ export class BillingRepository {
       await audit(tx, actorId, 'SETTLEMENT_DISCOUNT_REVERSED', 'settlement_adjustment', id);
       return updated!;
     });
+  }
+  async calculateQuote(
+    tx: Transaction,
+    lines: InvoiceInput['lines'],
+    serviceCategoryId: string,
+    taxEffectiveDate: string,
+  ) {
+    validateDate(taxEffectiveDate);
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(81001)`);
+    const rates = await tx
+      .select()
+      .from(taxRules)
+      .where(
+        and(
+          eq(taxRules.status, 'ACTIVE'),
+          lte(taxRules.effectiveFrom, taxEffectiveDate),
+          or(isNull(taxRules.effectiveTo), gte(taxRules.effectiveTo, taxEffectiveDate)),
+        ),
+      );
+    const calculated = calculateLines(lines, rates, serviceCategoryId);
+    return {
+      lines: calculated,
+      ...invoiceTotals(calculated),
+      taxEffectiveDate,
+      currency: 'INR' as const,
+      rounding: 'HALF_UP_PER_LINE_COMPONENT' as const,
+    };
+  }
+  async previewInTransaction(tx: Transaction, input: InvoiceInput) {
+    const prepared = await this.prepare(tx, input);
+    if (
+      !prepared.snapshot.company.address?.trim() ||
+      !prepared.snapshot.company.state?.trim() ||
+      !prepared.snapshot.company.country?.trim()
+    )
+      throw invalid(
+        'Complete the issuing company address, state and country before issuing a new invoice',
+      );
+    return { ...prepared, ...invoiceTotals(prepared.lines) };
   }
   private async prepare(tx: Transaction, input: InvoiceInput) {
     validatePeriod(input.invoiceDate, input.dueDate);

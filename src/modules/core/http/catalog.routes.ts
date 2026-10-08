@@ -75,7 +75,10 @@ export const catalogRoutes: FastifyPluginAsyncTypebox<{ services: CoreServices }
       preHandler: services.guards.read,
       schema: {
         tags: ['core shared catalog'],
-        querystring: Type.Omit(querySchema, ['status']),
+        querystring: Type.Object(
+          { ...querySchema.properties, status: Type.Optional(status) },
+          { additionalProperties: false },
+        ),
         response: {
           200: Type.Object({
             data: Type.Array(vendorResponse),
@@ -91,7 +94,12 @@ export const catalogRoutes: FastifyPluginAsyncTypebox<{ services: CoreServices }
     async (request) => {
       const page = request.query.page ?? 1,
         pageSize = request.query.pageSize ?? 25;
-      const result = await services.catalog.listVendors(page, pageSize);
+      const result = await services.catalog.listVendors(
+        page,
+        pageSize,
+        request.query.q,
+        request.query.status,
+      );
       return { data: result.items, pagination: { page, pageSize, total: result.total } };
     },
   );
@@ -167,7 +175,10 @@ export const catalogRoutes: FastifyPluginAsyncTypebox<{ services: CoreServices }
       preHandler: services.guards.read,
       schema: {
         tags: ['core shared catalog'],
-        querystring: Type.Omit(querySchema, ['status']),
+        querystring: Type.Object(
+          { ...querySchema.properties, status: Type.Optional(status) },
+          { additionalProperties: false },
+        ),
         response: {
           200: Type.Object({
             data: Type.Array(vehicleResponse),
@@ -183,7 +194,12 @@ export const catalogRoutes: FastifyPluginAsyncTypebox<{ services: CoreServices }
     async (request) => {
       const page = request.query.page ?? 1,
         pageSize = request.query.pageSize ?? 25;
-      const result = await services.catalog.listVehicles(page, pageSize);
+      const result = await services.catalog.listVehicles(
+        page,
+        pageSize,
+        request.query.q,
+        request.query.status,
+      );
       return { data: result.items, pagination: { page, pageSize, total: result.total } };
     },
   );

@@ -318,7 +318,7 @@ Purpose: cash-collection and bank-reconciliation view based on receipt dates.
 - invoice/customer/customer category;
 - service category;
 - payment method;
-- receipt status: Pending, Confirmed or Reversed; default Confirmed;
+- receipt status: Pending, Confirmed or Reversed; omitted status includes all states;
 - receipt number or payment-reference search.
 
 ### Columns
@@ -350,6 +350,16 @@ defines reversal posting semantics.
 
 Receipt date/number, amount, method, status, invoice number, customer and creation
 time. Default: receipt date descending, then receipt ID.
+
+### Unified payments register
+
+`GET /api/v1/core/reports/payments` and `/export` include unlinked receipts and
+gateway orders across all persisted states, including orders without receipts.
+Unlike the receipt-only report, this register defaults to all history. It preserves
+receipt and gateway statuses independently, uses authoritative receipt relationships
+for deduplication, and separates order face amounts, receipt accounting and verified
+funds awaiting review. See [FRONTEND_UNIFIED_PAYMENTS_REPORT.md](FRONTEND_UNIFIED_PAYMENTS_REPORT.md)
+for the exact implemented contract and India-time date basis.
 
 ## 7. Report: Payment due and receivables ageing
 

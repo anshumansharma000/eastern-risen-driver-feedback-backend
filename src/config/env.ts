@@ -1,3 +1,4 @@
+import type { CustomerMailConfig } from '../shared/mail/types.js';
 import type { ConnectionOptions } from 'node:tls';
 import { resolveDatabaseConnection, type DatabaseSslMode } from './database-connection.js';
 
@@ -17,6 +18,14 @@ export interface R2Config {
 }
 
 export interface AppConfig {
+  readonly paymentPendingReviewAfterHours: number;
+  readonly paymentClosedRecheckDays: number;
+  readonly paymentReconciliationWorkerEnabled: boolean;
+  readonly paymentReconciliationPollIntervalMs: number;
+  readonly customerAccountUrl: string | null;
+  readonly customerMail: CustomerMailConfig | null;
+  readonly customerMailWorkerEnabled: boolean;
+  readonly customerMailPollIntervalMs: number;
   readonly cashfree: {
     environment: 'sandbox' | 'production';
     appId: string;
@@ -145,6 +154,40 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
   }
 
   return {
+    paymentPendingReviewAfterHours: parsePositiveInteger(
+      'PAYMENT_PENDING_REVIEW_AFTER_HOURS',
+      environment.PAYMENT_PENDING_REVIEW_AFTER_HOURS,
+      24,
+    ),
+    paymentClosedRecheckDays: parsePositiveInteger(
+      'PAYMENT_CLOSED_RECHECK_DAYS',
+      environment.PAYMENT_CLOSED_RECHECK_DAYS,
+      7,
+    ),
+    paymentReconciliationWorkerEnabled: parseBoolean(
+      'PAYMENT_RECONCILIATION_WORKER_ENABLED',
+      environment.PAYMENT_RECONCILIATION_WORKER_ENABLED,
+      true,
+    ),
+    paymentReconciliationPollIntervalMs: parsePositiveInteger(
+      'PAYMENT_RECONCILIATION_POLL_INTERVAL_MS',
+      environment.PAYMENT_RECONCILIATION_POLL_INTERVAL_MS,
+      1000,
+    ),
+    customerAccountUrl: environment.CUSTOMER_ACCOUNT_URL
+      ? customerUrl('CUSTOMER_ACCOUNT_URL', environment.CUSTOMER_ACCOUNT_URL, nodeEnv)
+      : null,
+    customerMail: customerMailConfig(environment, nodeEnv),
+    customerMailWorkerEnabled: parseBoolean(
+      'CUSTOMER_MAIL_WORKER_ENABLED',
+      environment.CUSTOMER_MAIL_WORKER_ENABLED,
+      true,
+    ),
+    customerMailPollIntervalMs: parsePositiveInteger(
+      'CUSTOMER_MAIL_POLL_INTERVAL_MS',
+      environment.CUSTOMER_MAIL_POLL_INTERVAL_MS,
+      10000,
+    ),
     cashfree: cashfreeConfigured
       ? {
           environment: cashfreeEnvironment as 'sandbox' | 'production',
@@ -318,4 +361,85 @@ function parseDataEncryptionKey(value: string | undefined, nodeEnv: NodeEnvironm
 function parseOrigins(value: string | undefined): readonly string[] {
   if (!value?.trim()) return [];
   return [...new Set(value.split(',').map((candidate) => new URL(candidate.trim()).origin))];
+}
+
+function customerUrl(name: string, value: string, nodeEnv: NodeEnvironment): string {
+  const url = new URL(parseUrl(name, value));
+  if (
+    !['http:', 'https:'].includes(url.protocol) ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    (nodeEnv === 'production' && url.protocol !== 'https:')
+  )
+    throw new Error(
+      `${name} must be an HTTP(S) URL without credentials, query or fragment; production requires HTTPS`,
+    );
+  return url.toString().replace(/\/$/, '');
+}
+function parseBoolean(name: string, value: string | undefined, fallback: boolean): boolean {
+  if (!value?.trim()) return fallback;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  throw new Error(`${name} must be true or false`);
+}
+
+function mailAddress(name: string, value: string): string {
+  const address = value.trim();
+  if (
+    /[\r\n]/.test(address) ||
+    !/^(?:[^<>]+\s<)?[^\s<>@,]+@[^\s<>@,]+\.[^\s<>@,]+>?$/.test(address) ||
+    address.includes('<') !== address.endsWith('>')
+  ) {
+    throw new Error(`${name} must be a single email address, optionally with a display name`);
+  }
+  return address;
+}
+
+function customerMailConfig(
+  environment: NodeJS.ProcessEnv,
+  nodeEnv: NodeEnvironment,
+): CustomerMailConfig | null {
+  const provider =
+    environment.CUSTOMER_MAIL_PROVIDER?.trim() ||
+    (environment.CUSTOMER_MAIL_ENDPOINT?.trim() || environment.CUSTOMER_MAIL_TOKEN?.trim()
+      ? 'relay'
+      : undefined);
+  const resendConfigured = [
+    environment.RESEND_API_KEY,
+    environment.CUSTOMER_MAIL_FROM,
+    environment.CUSTOMER_MAIL_REPLY_TO,
+  ].some((value) => value?.trim());
+  if (!provider) {
+    if (resendConfigured) throw new Error('Set CUSTOMER_MAIL_PROVIDER=resend to enable Resend');
+    return null;
+  }
+  if (provider !== 'resend' && provider !== 'relay')
+    throw new Error('CUSTOMER_MAIL_PROVIDER must be resend or relay');
+  if (!environment.CUSTOMER_ACCOUNT_URL?.trim())
+    throw new Error('Customer mail requires CUSTOMER_ACCOUNT_URL');
+  if (provider === 'resend') {
+    if (!environment.RESEND_API_KEY?.trim() || !environment.CUSTOMER_MAIL_FROM?.trim()) {
+      throw new Error('Resend requires RESEND_API_KEY and CUSTOMER_MAIL_FROM');
+    }
+    return {
+      provider,
+      apiKey: environment.RESEND_API_KEY.trim(),
+      from: mailAddress('CUSTOMER_MAIL_FROM', environment.CUSTOMER_MAIL_FROM),
+      ...(environment.CUSTOMER_MAIL_REPLY_TO?.trim()
+        ? { replyTo: mailAddress('CUSTOMER_MAIL_REPLY_TO', environment.CUSTOMER_MAIL_REPLY_TO) }
+        : {}),
+    };
+  }
+  if (!environment.CUSTOMER_MAIL_ENDPOINT?.trim() || !environment.CUSTOMER_MAIL_TOKEN?.trim()) {
+    throw new Error(
+      'Customer mail requires CUSTOMER_MAIL_ENDPOINT, CUSTOMER_MAIL_TOKEN and CUSTOMER_ACCOUNT_URL',
+    );
+  }
+  return {
+    provider,
+    endpoint: customerUrl('CUSTOMER_MAIL_ENDPOINT', environment.CUSTOMER_MAIL_ENDPOINT, nodeEnv),
+    token: environment.CUSTOMER_MAIL_TOKEN.trim(),
+  };
 }

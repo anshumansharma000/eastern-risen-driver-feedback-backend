@@ -29,7 +29,12 @@ export const masterRoutes: FastifyPluginAsyncTypebox<{ services: CoreServices }>
     async (request) => {
       const page = request.query.page ?? 1,
         pageSize = request.query.pageSize ?? 25;
-      const result = await services.masters.listCompanies(page, pageSize, request.query.status);
+      const result = await services.masters.listCompanies(
+        page,
+        pageSize,
+        request.query.status,
+        request.query.q,
+      );
       return {
         data: result.items.map(present),
         pagination: { page, pageSize, total: result.total },
@@ -97,7 +102,10 @@ export const masterRoutes: FastifyPluginAsyncTypebox<{ services: CoreServices }>
       preHandler: services.guards.read,
       schema: {
         tags: ['core masters'],
-        querystring: schemas.querySchema,
+        querystring: Type.Object(
+          { ...schemas.querySchema.properties, companyId: Type.Optional(schemas.uuidSchema) },
+          { additionalProperties: false },
+        ),
         response: {
           200: Type.Object({
             data: Type.Array(schemas.bankAccountsResponse),
@@ -113,7 +121,13 @@ export const masterRoutes: FastifyPluginAsyncTypebox<{ services: CoreServices }>
     async (request) => {
       const page = request.query.page ?? 1,
         pageSize = request.query.pageSize ?? 25;
-      const result = await services.masters.listBankAccounts(page, pageSize, request.query.status);
+      const result = await services.masters.listBankAccounts(
+        page,
+        pageSize,
+        request.query.status,
+        request.query.q,
+        request.query.companyId,
+      );
       return {
         data: result.items.map(present),
         pagination: { page, pageSize, total: result.total },
@@ -289,7 +303,12 @@ export const masterRoutes: FastifyPluginAsyncTypebox<{ services: CoreServices }>
     async (request) => {
       const page = request.query.page ?? 1,
         pageSize = request.query.pageSize ?? 25;
-      const result = await services.masters.listGuests(page, pageSize, request.query.status);
+      const result = await services.masters.listGuests(
+        page,
+        pageSize,
+        request.query.status,
+        request.query.q,
+      );
       return {
         data: result.items.map(present),
         pagination: { page, pageSize, total: result.total },
@@ -371,7 +390,12 @@ export const masterRoutes: FastifyPluginAsyncTypebox<{ services: CoreServices }>
     async (request) => {
       const page = request.query.page ?? 1,
         pageSize = request.query.pageSize ?? 25;
-      const result = await services.masters.listHotels(page, pageSize, request.query.status);
+      const result = await services.masters.listHotels(
+        page,
+        pageSize,
+        request.query.status,
+        request.query.q,
+      );
       return {
         data: result.items.map(present),
         pagination: { page, pageSize, total: result.total },
@@ -437,7 +461,10 @@ export const masterRoutes: FastifyPluginAsyncTypebox<{ services: CoreServices }>
       preHandler: services.guards.read,
       schema: {
         tags: ['core masters'],
-        querystring: schemas.querySchema,
+        querystring: Type.Object(
+          { ...schemas.querySchema.properties, hotelId: Type.Optional(schemas.uuidSchema) },
+          { additionalProperties: false },
+        ),
         response: {
           200: Type.Object({
             data: Type.Array(schemas.hotelRatesResponse),
@@ -453,7 +480,13 @@ export const masterRoutes: FastifyPluginAsyncTypebox<{ services: CoreServices }>
     async (request) => {
       const page = request.query.page ?? 1,
         pageSize = request.query.pageSize ?? 25;
-      const result = await services.masters.listHotelRates(page, pageSize, request.query.status);
+      const result = await services.masters.listHotelRates(
+        page,
+        pageSize,
+        request.query.status,
+        request.query.q,
+        request.query.hotelId,
+      );
       return {
         data: result.items.map(present),
         pagination: { page, pageSize, total: result.total },
@@ -541,6 +574,7 @@ export const masterRoutes: FastifyPluginAsyncTypebox<{ services: CoreServices }>
         page,
         pageSize,
         request.query.status,
+        request.query.q,
       );
       return {
         data: result.items.map(present),
@@ -627,7 +661,12 @@ export const masterRoutes: FastifyPluginAsyncTypebox<{ services: CoreServices }>
     async (request) => {
       const page = request.query.page ?? 1,
         pageSize = request.query.pageSize ?? 25;
-      const result = await services.masters.listTaxRules(page, pageSize, request.query.status);
+      const result = await services.masters.listTaxRules(
+        page,
+        pageSize,
+        request.query.status,
+        request.query.q,
+      );
       return {
         data: result.items.map(present),
         pagination: { page, pageSize, total: result.total },
@@ -693,7 +732,10 @@ export const masterRoutes: FastifyPluginAsyncTypebox<{ services: CoreServices }>
       preHandler: services.guards.read,
       schema: {
         tags: ['core masters'],
-        querystring: schemas.querySchema,
+        querystring: Type.Object(
+          { ...schemas.querySchema.properties, vendorId: Type.Optional(schemas.uuidSchema) },
+          { additionalProperties: false },
+        ),
         response: {
           200: Type.Object({
             data: Type.Array(schemas.vendorProfilesResponse),
@@ -713,6 +755,8 @@ export const masterRoutes: FastifyPluginAsyncTypebox<{ services: CoreServices }>
         page,
         pageSize,
         request.query.status,
+        request.query.q,
+        request.query.vendorId,
       );
       return {
         data: result.items.map(present),

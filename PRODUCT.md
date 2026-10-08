@@ -75,7 +75,7 @@ The Core API is the operational and financial system of record for Eastern Risen
 - INR invoice calculation and issuance.
 - Configured IGST, CGST, and SGST application selected by an operator.
 - Import-only preservation of legacy service tax.
-- Invoice-linked receipts and settlement discounts.
+- Invoice-linked receipts (including payments dated before the issued invoice) and settlement discounts.
 - Commercial bookings linked optionally to operational/feedback bookings; versioned quotes, accepted quote timestamps, issued-invoice linking, configurable INR payment milestones, and verified Cashfree collection.
 - Current receivables and guest activity reporting.
 - Audit records and a transactional outbox.
@@ -93,14 +93,14 @@ The following are not capabilities of v1 and must not be implied by a client:
 - pro-forma invoices, purchase orders, credit notes, or debit notes;
 - invoice PDF generation, email delivery, or messaging delivery;
 - recurring invoices;
-- advance payments, customer credit balances, or unallocated overpayments;
+- unallocated advance payments, customer credit balances, or unallocated overpayments;
 - partial allocation of one receipt across multiple invoices;
 - refunds or bank reconciliation;
 - inventory, itinerary execution, payroll, or general ledger accounting;
 - hard deletion of Core business records;
 - company-scoped tenancy or per-company role membership;
 - one account holding multiple roles or simultaneous module memberships;
-- general customer accounts or self-service beyond a private commercial booking link;
+- unrestricted customer registration, customer-managed teams, or customer booking amendments;
 - outbox delivery to an event broker;
 - master-data bulk import, historical receipt import, or historical cancelled-invoice import.
 
@@ -979,3 +979,17 @@ Every Core product change must answer and document:
 - What OpenAPI and client compatibility impact does it have?
 - Which unit, integration, concurrency, authorization, and migration tests prove it?
 - Has this document been updated in the same change?
+
+
+## Customer account access extension
+
+The customer account extension is specified in [CUSTOMER_ACCOUNTS_API.md](CUSTOMER_ACCOUNTS_API.md).
+It adds a CUSTOMER identity role, staff-managed invitations, one standard membership
+level linking named users to existing billing customers, customer website sessions,
+customer-safe booking/invoice history, quote acceptance, milestone checkout and
+password recovery. Customers may have multiple authorised people and a person may
+have multiple customer memberships. These memberships are separate from staff roles
+and issuing-company tenancy. There is no automatic historical ownership matching.
+Private booking links retain their independent access and existing contracts.
+Activation delivery may be manual; self-service recovery requires the configured
+transactional mail service and durable queue worker described in that specification.

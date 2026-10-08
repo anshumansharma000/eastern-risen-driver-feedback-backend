@@ -1,3 +1,4 @@
+import { textSearch } from '../../shared/database/search.js';
 import { and, asc, count, eq, inArray, sql } from 'drizzle-orm';
 import type { AppDatabase } from '../../database/client.js';
 import { authAccounts, authSessions, auditEvents } from '../../database/schema/index.js';
@@ -96,8 +97,12 @@ export class CoreIdentityAdapter implements CoreIdentity {
       return user(account);
     });
   }
-  async listUsers(page: number, pageSize: number) {
-    const filter = inArray(authAccounts.role, roles);
+  async listUsers(page: number, pageSize: number, q?: string, status?: CoreUser['status']) {
+    const filter = and(
+      inArray(authAccounts.role, roles),
+      status ? eq(authAccounts.status, status) : undefined,
+      textSearch(q, [authAccounts.displayName, authAccounts.username, authAccounts.email]),
+    );
     const [items, [total]] = await Promise.all([
       this.db
         .select(selection)

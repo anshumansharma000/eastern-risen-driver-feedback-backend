@@ -12,6 +12,21 @@ receivables. See [PRODUCT.md](PRODUCT.md) for the complete Core product source o
 truth. [CORE_API.md](CORE_API.md) remains a concise technical implementation guide.
 Existing feedback routes are preserved.
 
+The staff-only unified payments report combines manual receipts and gateway orders
+with independent status fields and deduplicated receipts. See
+[the frontend handoff](FRONTEND_UNIFIED_PAYMENTS_REPORT.md) for JSON/CSV endpoints,
+filters, summary semantics and migration `0025_young_penance.sql`.
+
+## Customer accounts
+
+Customer account access is invitation-based, with individual sign-ins and one standard
+membership level per billing customer. It uses the public website account area and a
+separate customer session cookie. Existing booking links continue without registration.
+See [CUSTOMER_ACCOUNTS_API.md](CUSTOMER_ACCOUNTS_API.md) for endpoints, migrations,
+mail delivery setup, and access rules. Frontend implementation prompts are
+[admin access management](FRONTEND_CUSTOMER_ACCESS_ADMIN_PROMPT.md) and
+[website customer accounts](FRONTEND_CUSTOMER_ACCOUNTS_WEBSITE_PROMPT.md).
+
 ## Local setup
 
 Requirements:
@@ -271,3 +286,9 @@ administrator provisioning script, and Drizzle migration commands.
 The API is a modular monolith. HTTP schemas and routes live beside their domain
 services and repositories under `src/modules`. Database-enforced invariants are
 defined in `src/database/schema` and reviewed in generated SQL migrations.
+
+## Customer email
+
+Resend setup, required environment values, automatic delivery and provider switching
+are documented in [EMAIL_SETUP.md](EMAIL_SETUP.md). Delivery runs inside the existing
+API service; no separate email worker service is needed.

@@ -5,13 +5,13 @@ import type { CoreServices } from '../index.js';
 import { commercialRoutes } from './commercial.routes.js';
 
 describe('Cashfree notification endpoint', () => {
-  it('parses exact raw bytes and reconciles an authenticated order', async () => {
+  it('parses exact raw bytes and durably queues an authenticated order', async () => {
     const orders: string[] = [];
     const app = Fastify().withTypeProvider<TypeBoxTypeProvider>();
     const services = {
       guards: { read: async () => {}, write: async () => {}, admin: async () => {} },
       commercial: {
-        reconcile: async (id: string) => {
+        receivePaymentWebhook: async (id: string) => {
           orders.push(id);
           return { status: 'PAID' };
         },
@@ -37,6 +37,47 @@ describe('Cashfree notification endpoint', () => {
     });
     expect(response.statusCode).toBe(200);
     expect(orders).toEqual(['er_1234567890abcdef1234567890abcdef']);
+    await app.close();
+  });
+});
+
+describe('Cashfree callback validation', () => {
+  it('rejects unsigned and malformed callbacks before queuing work', async () => {
+    const queued: string[] = [];
+    const app = Fastify().withTypeProvider<TypeBoxTypeProvider>();
+    const services = {
+      guards: { read: async () => {}, write: async () => {}, admin: async () => {} },
+      commercial: {
+        receivePaymentWebhook: async (id: string) => {
+          queued.push(id);
+        },
+      },
+      paymentProvider: {
+        name: 'cashfree',
+        verifyWebhook: (_body: Buffer, signature: string) => signature === 'valid',
+      },
+    } as unknown as CoreServices;
+    await app.register(commercialRoutes, { services });
+    const unsigned = await app.inject({
+      method: 'POST',
+      url: '/payments/webhooks/cashfree',
+      payload: {},
+    });
+    expect(unsigned.statusCode).toBe(401);
+    for (const payload of ['null', '{', '{}']) {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/payments/webhooks/cashfree',
+        headers: {
+          'content-type': 'application/json',
+          'x-webhook-signature': 'valid',
+          'x-webhook-timestamp': '1780000000',
+        },
+        payload,
+      });
+      expect(response.statusCode).toBe(400);
+    }
+    expect(queued).toEqual([]);
     await app.close();
   });
 });

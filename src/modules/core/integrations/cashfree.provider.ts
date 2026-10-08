@@ -1,5 +1,9 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
-import type { PaymentProvider } from '../application/payment-provider.js';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import type {
+  PaymentProvider,
+  PaymentAttemptStatus,
+  ProviderOrderSnapshot,
+} from '../application/payment-provider.js';
 import { AppError } from '../../../shared/errors/app-error.js';
 import { decimal, minor } from '../domain/money.js';
 
@@ -41,7 +45,8 @@ export class CashfreeProvider implements PaymentProvider {
     }
     if (!response.ok) {
       throw new AppError({
-        code: 'PAYMENT_PROVIDER_ERROR',
+        code:
+          response.status === 404 ? 'PAYMENT_PROVIDER_ORDER_NOT_FOUND' : 'PAYMENT_PROVIDER_ERROR',
         message: 'Payment provider could not complete the request',
         statusCode: 502,
       });
@@ -49,12 +54,18 @@ export class CashfreeProvider implements PaymentProvider {
     return response.json();
   }
 
+  private creationKey(orderId: string): string {
+    const hex = createHash('sha256').update(`cashfree:create:${orderId}`).digest('hex');
+    // Cashfree expects a UUID. The same merchant order always gets the same key.
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-${((parseInt(hex[16]!, 16) & 3) | 8).toString(16)}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+  }
+
   async createOrder(input: Parameters<PaymentProvider['createOrder']>[0]) {
     let body: { payment_session_id?: string; order_id?: string };
     try {
       body = (await this.request('/orders', {
         method: 'POST',
-        headers: { 'x-idempotency-key': input.orderId },
+        headers: { 'x-idempotency-key': this.creationKey(input.orderId) },
         body: JSON.stringify({
           order_id: input.orderId,
           order_amount: Number(input.amount),
@@ -82,42 +93,94 @@ export class CashfreeProvider implements PaymentProvider {
     return { sessionId: body.payment_session_id };
   }
 
-  async successfulPayment(orderId: string) {
-    const payments = (await this.request(
-      `/orders/${encodeURIComponent(orderId)}/payments`,
-    )) as Array<{
-      cf_payment_id: string | number;
-      payment_status: string;
-      payment_amount: number;
-      payment_currency: string;
-      payment_time: string;
-    }>;
-    if (!Array.isArray(payments))
-      throw new AppError({
+  async inspectOrder(orderId: string): Promise<ProviderOrderSnapshot> {
+    const [orderData, paymentData] = await Promise.all([
+      this.request(`/orders/${encodeURIComponent(orderId)}`),
+      this.request(`/orders/${encodeURIComponent(orderId)}/payments`),
+    ]);
+    const invalidResponse = () =>
+      new AppError({
         code: 'PAYMENT_PROVIDER_RESPONSE_INVALID',
         message: 'Invalid payment provider response',
         statusCode: 502,
       });
-    const paid = payments.find((item) => item.payment_status === 'SUCCESS');
-    if (!paid) return null;
+    const record = (value: unknown): Record<string, unknown> => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw invalidResponse();
+      return value as Record<string, unknown>;
+    };
+    const date = (value: unknown, optional = false): string | null => {
+      if (optional && (value === null || value === undefined)) return null;
+      if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) throw invalidResponse();
+      return value;
+    };
+    const order = record(orderData);
     if (
-      paid.payment_currency !== 'INR' ||
-      !Number.isFinite(paid.payment_amount) ||
-      !paid.payment_time
-    ) {
-      throw new AppError({
-        code: 'PAYMENT_PROVIDER_RESPONSE_INVALID',
-        message: 'Invalid payment provider response',
-        statusCode: 502,
-      });
-    }
-    const amount = decimal(BigInt(Math.round(paid.payment_amount * 100)));
-    minor(amount);
+      order.order_id !== orderId ||
+      typeof order.order_status !== 'string' ||
+      !Array.isArray(paymentData)
+    )
+      throw invalidResponse();
+    const orderStatuses = ['ACTIVE', 'PAID', 'EXPIRED', 'TERMINATED', 'TERMINATION_REQUESTED'];
+    const attemptStatuses = [
+      'NOT_ATTEMPTED',
+      'PENDING',
+      'SUCCESS',
+      'FAILED',
+      'USER_DROPPED',
+      'CANCELLED',
+      'VOID',
+    ];
+    const ids = new Set<string>();
+    const attempts = paymentData.map((value) => {
+      const item = record(value);
+      if (
+        item.order_id !== orderId ||
+        !['string', 'number'].includes(typeof item.cf_payment_id) ||
+        !String(item.cf_payment_id) ||
+        (typeof item.cf_payment_id === 'number' && !Number.isSafeInteger(item.cf_payment_id)) ||
+        typeof item.payment_status !== 'string' ||
+        typeof item.payment_currency !== 'string' ||
+        typeof item.payment_amount !== 'number' ||
+        !Number.isFinite(item.payment_amount) ||
+        item.payment_amount < 0 ||
+        !Number.isSafeInteger(Math.round(item.payment_amount * 100))
+      )
+        throw invalidResponse();
+      const paymentId = String(item.cf_payment_id);
+      if (ids.has(paymentId)) throw invalidResponse();
+      ids.add(paymentId);
+      const amount = decimal(BigInt(Math.round(item.payment_amount * 100)));
+      minor(amount);
+      const errors = item.error_details ? record(item.error_details) : {};
+      return {
+        paymentId,
+        status: (item.payment_status === 'SUCCESS' && item.is_captured === false
+          ? 'PENDING'
+          : attemptStatuses.includes(item.payment_status)
+            ? item.payment_status
+            : 'UNKNOWN') as PaymentAttemptStatus,
+        rawStatus: item.payment_status,
+        amount,
+        currency: item.payment_currency,
+        initiatedAt: date(item.payment_time)!,
+        completedAt: date(item.payment_completion_time, true),
+        failureCode: typeof errors.error_code === 'string' ? errors.error_code.slice(0, 200) : null,
+        failureMessage:
+          typeof errors.error_description === 'string'
+            ? errors.error_description.slice(0, 1000)
+            : null,
+      };
+    });
     return {
-      paymentId: String(paid.cf_payment_id),
-      amount,
-      currency: 'INR' as const,
-      receivedAt: paid.payment_time,
+      status: (orderStatuses.includes(order.order_status)
+        ? order.order_status
+        : 'UNKNOWN') as ProviderOrderSnapshot['status'],
+      rawStatus: order.order_status,
+      expiresAt: date(order.order_expiry_time, true),
+      ...(typeof order.payment_session_id === 'string' && order.payment_session_id
+        ? { sessionId: order.payment_session_id }
+        : {}),
+      attempts,
     };
   }
 

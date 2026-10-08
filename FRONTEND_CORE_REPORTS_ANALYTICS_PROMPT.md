@@ -458,8 +458,8 @@ GET /reports/payments-received/export
 Additional filters:
 
 ```ts
-status?: "PENDING" | "CONFIRMED" | "REVERSED"; // defaults to CONFIRMED
-method?: "CASH" | "CHEQUE" | "DD" | "CARD" | "UPI";
+status?: "PENDING" | "CONFIRMED" | "REVERSED"; // omitted includes all receipt states
+method?: "CASH" | "CHEQUE" | "DD" | "CARD" | "UPI" | "GATEWAY";
 sortBy?:
   | "receivedDate" | "receiptNumber" | "amount" | "method" | "status"
   | "invoiceNumber" | "customer" | "createdAt";
@@ -501,8 +501,8 @@ interface PaymentReportRow {
 Summary fields: `total`, `confirmedCount`, `confirmedAmount`, `pendingCount`,
 `pendingAmount`, `reversedCount`, `reversedAmount`.
 
-Provide explicit status tabs or a filter. Because the backend defaults to Confirmed,
-send a status deliberately when showing Pending or Reversed. Summary values reflect
+Provide explicit status tabs or a filter. Omit status to show all receipt states;
+send `status=CONFIRMED` for confirmed-only collections. Summary values reflect
 the active filters; do not assume a Confirmed-filtered response also contains totals
 for excluded statuses. Only confirmed payments are cash received. Reversed amounts
 are shown as audit history, not automatically as negative cash.
@@ -780,7 +780,9 @@ Add tests at the same layers already used by the frontend. At minimum cover:
 6. Vehicle-wise report renders snapshot registration/name and handles unassigned rows.
 7. Tax report renders the overall distinct-line taxable base and grouped tax amounts
    without summing component bases together.
-8. Payments default to Confirmed and can explicitly request Pending or Reversed.
+8. Receipt reports include all statuses by default and can explicitly request Confirmed,
+   Pending or Reversed. Use the unified endpoints and contract in
+   `FRONTEND_UNIFIED_PAYMENTS_REPORT.md` for gateway orders without receipts.
 9. Receivables ageing selection sends `ageingBucket`; no historical as-of UI exists.
 10. Settlement discounts never appear as cash received.
 11. Customer Statement keeps cash and discount credit columns separate.

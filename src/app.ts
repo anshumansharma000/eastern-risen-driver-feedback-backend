@@ -1,3 +1,4 @@
+import { customerRoutes, customerAccessRoutes } from './modules/customer/customer.routes.js';
 import { coreRoutes } from './modules/core/index.js';
 import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
@@ -133,6 +134,18 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   });
 
   if (options.services) {
+    await app.register(customerRoutes, {
+      prefix: '/api/v1/customer',
+      service: options.services.customerService,
+      authService: options.services.authService,
+      cookieName: options.services.customerCookieName,
+      secureCookie: options.services.secureCookie,
+    });
+    await app.register(customerAccessRoutes, {
+      prefix: '/api/v1/core',
+      service: options.services.customerService,
+      core: options.services.core,
+    });
     await app.register(coreRoutes, { prefix: '/api/v1/core', services: options.services.core });
     await app.register(authRoutes, {
       prefix: '/api/v1/auth',

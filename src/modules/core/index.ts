@@ -1,5 +1,8 @@
 import { ReportsRepository } from './persistence/reports.repository.js';
 import { ReportingRepository } from './persistence/reporting.repository.js';
+import { PaymentsReportRepository } from './persistence/payments-report.repository.js';
+import { PaymentReviewService } from './application/payment-review.service.js';
+import { paymentReviewRoutes } from './http/payment-review.routes.js';
 import { reportRoutes } from './http/reports.routes.js';
 import { DrizzleQueryError } from 'drizzle-orm';
 import type { preHandlerAsyncHookHandler } from 'fastify';
@@ -24,14 +27,17 @@ export function createCoreServices(
   catalog: SharedCatalog,
   authenticated: preHandlerAsyncHookHandler,
   paymentProvider: PaymentProvider | null = null,
+  paymentPendingReviewAfterHours = 24,
 ) {
   const billing = new BillingRepository(db, catalog);
   return {
     masters: new MastersRepository(db, catalog),
     reports: new ReportsRepository(db),
     reporting: new ReportingRepository(db),
+    paymentsReport: new PaymentsReportRepository(db),
+    paymentReview: new PaymentReviewService(db, billing),
     billing,
-    commercial: new CommercialService(db, billing, paymentProvider),
+    commercial: new CommercialService(db, billing, paymentProvider, paymentPendingReviewAfterHours),
     paymentProvider,
     identity,
     catalog,
@@ -75,6 +81,7 @@ export const coreRoutes: FastifyPluginAsyncTypebox<{ services: CoreServices }> =
     return parentHandler.call(app, translated, request, reply);
   });
   await app.register(reportRoutes, { services: options.services });
+  await app.register(paymentReviewRoutes, { services: options.services });
   await app.register(masterRoutes, { services: options.services });
   await app.register(billingRoutes, { services: options.services });
   await app.register(userRoutes, { services: options.services });

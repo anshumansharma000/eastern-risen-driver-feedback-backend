@@ -1,7 +1,10 @@
+import { bookingListQuery, bookingListEnvelope } from './booking-list.schemas.js';
+import { createHash } from 'node:crypto';
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import { Type } from 'typebox';
 import type { CoreServices } from '../index.js';
 import { dateSchema, moneySchema, nonblank, paramsSchema, uuidSchema } from './masters.schemas.js';
+import { invoiceBody, lineBody } from './billing.schemas.js';
 import { AppError } from '../../../shared/errors/app-error.js';
 
 const bookingBody = Type.Object(
@@ -16,13 +19,41 @@ const bookingBody = Type.Object(
   },
   { additionalProperties: false },
 );
+const milestoneBody = Type.Object(
+  { label: nonblank, amount: moneySchema, dueOn: dateSchema },
+  { additionalProperties: false },
+);
+const planBody = Type.Object(
+  {
+    mode: Type.Union([Type.Literal('COMPANY_DEFAULT'), Type.Literal('CUSTOM')]),
+    milestones: Type.Optional(Type.Array(milestoneBody, { minItems: 1, maxItems: 12 })),
+  },
+  { additionalProperties: false },
+);
+const calculationBody = Type.Object(
+  {
+    lines: Type.Array(lineBody, { minItems: 1, maxItems: 200 }),
+    taxEffectiveDate: dateSchema,
+    paymentPlan: planBody,
+  },
+  { additionalProperties: false },
+);
+const invoiceDetails = Type.Omit(invoiceBody, [
+  'companyId',
+  'customerId',
+  'serviceCategoryId',
+  'lines',
+]);
 const quoteBody = Type.Object(
   {
     description: Type.String({ minLength: 1, maxLength: 20000, pattern: '\\S' }),
     inclusions: Type.String({ maxLength: 20000 }),
     exclusions: Type.String({ maxLength: 20000 }),
     terms: Type.String({ minLength: 1, maxLength: 20000, pattern: '\\S' }),
-    total: moneySchema,
+    total: Type.Optional(moneySchema),
+    lines: Type.Optional(Type.Array(lineBody, { minItems: 1, maxItems: 200 })),
+    taxEffectiveDate: Type.Optional(dateSchema),
+    paymentPlan: Type.Optional(planBody),
     expiresOn: Type.Optional(Type.Union([dateSchema, Type.Null()])),
   },
   { additionalProperties: false },
@@ -49,7 +80,7 @@ const orderParams = Type.Object({ orderId: Type.String({ pattern: '^er_[a-f0-9]{
 const tokenOrderParams = Type.Object({ ...tokenParams.properties, ...orderParams.properties });
 const data = Type.Object({ data: Type.Any() });
 const nullableString = Type.Union([Type.String(), Type.Null()]);
-const publicBookingResponse = Type.Object({
+export const publicBookingResponse = Type.Object({
   data: Type.Object({
     reference: Type.String(),
     title: Type.String(),
@@ -58,6 +89,10 @@ const publicBookingResponse = Type.Object({
     serviceEndsOn: nullableString,
     quote: Type.Union([
       Type.Object({
+        id: uuidSchema,
+        legacy: Type.Boolean(),
+        pricing: Type.Any(),
+        proposedPlan: Type.Any(),
         version: Type.Integer(),
         description: Type.String(),
         inclusions: Type.String(),
@@ -81,6 +116,8 @@ const publicBookingResponse = Type.Object({
       }),
       Type.Null(),
     ]),
+    paymentReady: Type.Boolean(),
+    nextAction: Type.String(),
     paymentReviewRequired: Type.Boolean(),
     payments: Type.Array(
       Type.Object({
@@ -170,16 +207,16 @@ export const commercialRoutes: FastifyPluginAsyncTypebox<{ services: CoreService
       preHandler: services.guards.read,
       schema: {
         tags: ['core commercial'],
-        querystring: Type.Object({
-          page: Type.Optional(Type.Integer({ minimum: 1 })),
-          pageSize: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
-        }),
-        response: { 200: data },
+        querystring: bookingListQuery,
+        response: { 200: bookingListEnvelope },
       },
     },
-    async (request) => ({
-      data: await commercial.list(request.query.page ?? 1, request.query.pageSize ?? 25),
-    }),
+    async (request) => {
+      const page = request.query.page ?? 1,
+        pageSize = request.query.pageSize ?? 25;
+      const result = await commercial.listPage(request.query);
+      return asJson({ data: result.items, pagination: { page, pageSize, total: result.total } });
+    },
   );
   app.get(
     '/commercial-bookings/:id',
@@ -267,6 +304,50 @@ export const commercialRoutes: FastifyPluginAsyncTypebox<{ services: CoreService
           data: await commercial.addQuote(request.params.id, request.body, request.auth!.accountId),
         }),
       ),
+  );
+  app.post(
+    '/commercial-bookings/:id/quotes/calculate',
+    {
+      preHandler: services.guards.write,
+      schema: { params: paramsSchema, body: calculationBody, response: { 200: data } },
+    },
+    async (request) =>
+      asJson({ data: await commercial.calculateQuote(request.params.id, request.body) }),
+  );
+  app.post(
+    '/commercial-bookings/:id/billing-review',
+    {
+      preHandler: services.guards.write,
+      schema: { params: paramsSchema, body: Type.Partial(invoiceDetails), response: { 200: data } },
+    },
+    async (request) =>
+      asJson({ data: await commercial.billingReview(request.params.id, request.body) }),
+  );
+  app.post(
+    '/commercial-bookings/:id/enable-payment',
+    {
+      preHandler: services.guards.write,
+      schema: {
+        params: paramsSchema,
+        body: Type.Object(
+          {
+            quoteId: uuidSchema,
+            reviewToken: Type.String({ pattern: '^[a-f0-9]{64}$' }),
+            invoiceDetails,
+          },
+          { additionalProperties: false },
+        ),
+        response: { 200: data },
+      },
+    },
+    async (request) =>
+      asJson({
+        data: await commercial.enablePayment(
+          request.params.id,
+          request.body,
+          request.auth!.accountId,
+        ),
+      }),
   );
   app.post(
     '/commercial-bookings/:id/invoice',
@@ -359,10 +440,26 @@ export const commercialRoutes: FastifyPluginAsyncTypebox<{ services: CoreService
   app.post(
     '/public/bookings/:token/accept',
     {
-      schema: { tags: ['core commercial'], params: tokenParams, response: { 200: data } },
+      preValidation: async (request) => {
+        request.body ??= {};
+      },
+      schema: {
+        tags: ['core commercial'],
+        params: tokenParams,
+        body: Type.Optional(
+          Type.Object(
+            { quoteVersion: Type.Optional(Type.Integer({ minimum: 1 })) },
+            { additionalProperties: false },
+          ),
+        ),
+        response: { 200: data },
+      },
       config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
     },
-    async (request) => asJson({ data: await commercial.acceptQuote(request.params.token) }),
+    async (request) =>
+      asJson({
+        data: await commercial.acceptQuote(request.params.token, request.body?.quoteVersion),
+      }),
   );
   app.post(
     '/public/bookings/:token/milestones/:milestoneId/checkout',
@@ -441,7 +538,7 @@ export const commercialRoutes: FastifyPluginAsyncTypebox<{ services: CoreService
             statusCode: 400,
           });
         }
-        const orderId = (event as { data?: { order?: { order_id?: unknown } } }).data?.order
+        const orderId = (event as { data?: { order?: { order_id?: unknown } } } | null)?.data?.order
           ?.order_id;
         if (typeof orderId !== 'string' || !/^er_[a-f0-9]{32}$/.test(orderId))
           throw new AppError({
@@ -449,7 +546,10 @@ export const commercialRoutes: FastifyPluginAsyncTypebox<{ services: CoreService
             message: 'Invalid payment notification',
             statusCode: 400,
           });
-        await commercial.reconcile(orderId);
+        await commercial.receivePaymentWebhook(
+          orderId,
+          createHash('sha256').update(body).digest('hex'),
+        );
         return { received: true };
       },
     );

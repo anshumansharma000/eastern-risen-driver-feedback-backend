@@ -1,3 +1,6 @@
+import { paymentOrderNeedsReview } from './payment-review-predicate.js';
+import { paymentOrders } from './commercial.schema.js';
+import { invoiceAccounting } from './invoice-accounting.js';
 import { sql, type SQL } from 'drizzle-orm';
 import type {
   AuditReportQuery,
@@ -40,8 +43,11 @@ const invoiceCategoryName = sql`coalesce(i.snapshot->'serviceCategory'->>'name',
 const invoiceVehicleRegistration = sql`nullif(i.snapshot->'vehicle'->>'registrationNumber', '')`;
 const invoiceVehicleName = sql`nullif(coalesce(i.snapshot->'vehicle'->>'name', i.snapshot->'vehicle'->>'displayName'), '')`;
 const invoiceVehicleType = sql`nullif(i.snapshot->'vehicle'->>'vehicleType', '')`;
-const invoiceReceived = sql`coalesce((select sum(r.amount) from ${receipts} r where r.invoice_id = i.id and r.status = 'CONFIRMED'), 0)`;
-const invoiceAdjusted = sql`coalesce((select sum(a.amount) from ${settlementAdjustments} a where a.invoice_id = i.id and a.reversed_at is null), 0)`;
+const {
+  received: invoiceReceived,
+  adjusted: invoiceAdjusted,
+  due: invoiceDue,
+} = invoiceAccounting(sql`i.id`, sql`i.status`, sql`i.grand_total`);
 
 function currentFinancialYear(): { from: string; to: string } {
   const parts = new Intl.DateTimeFormat('en', {
@@ -149,7 +155,7 @@ export class ReportingRepository {
         i.grand_total::numeric(18,2)::text as "grandTotal",
         (${invoiceReceived})::numeric(18,2)::text as "receivedAmount",
         (${invoiceAdjusted})::numeric(18,2)::text as "adjustmentAmount",
-        (case when i.status = 'ISSUED' then i.grand_total - (${invoiceReceived}) - (${invoiceAdjusted}) else 0 end)::numeric(18,2)::text as "dueAmount",
+        (${invoiceDue})::numeric(18,2)::text as "dueAmount",
         case
           when i.status <> 'ISSUED' then 'NOT_APPLICABLE'
           when i.grand_total - (${invoiceReceived}) - (${invoiceAdjusted}) = 0 then 'PAID'
@@ -344,7 +350,6 @@ export class ReportingRepository {
       parts.push(sql`i.service_category_id = ${input.serviceCategoryId}`);
     if (input.vehicleId) parts.push(sql`i.vehicle_id = ${input.vehicleId}`);
     if (input.status) parts.push(sql`r.status::text = ${input.status}`);
-    else parts.push(sql`r.status = 'CONFIRMED'`);
     if (input.method) parts.push(sql`r.method::text = ${input.method}`);
     if (input.q) {
       const term = `%${input.q.trim()}%`;
@@ -761,6 +766,7 @@ export class ReportingRepository {
 
   private async configurationAlerts() {
     const rows = await this.rows(sql`select
+      (select count(*) from ${paymentOrders} o where ${paymentOrderNeedsReview(sql`o`)})::integer as "paymentsRequiringReview",
       (select count(*) from ${invoices} where status='DRAFT' and created_at < now() - interval '30 days')::integer as "staleDrafts",
       (select count(*) from ${invoices} i where i.status='ISSUED' and nullif(i.details->>'dueDate','') is null and i.grand_total - (${invoiceReceived}) - (${invoiceAdjusted}) > 0)::integer as "receivablesWithoutDueDate",
       (select count(*) from ${companies} where status='ACTIVE' and (nullif(btrim(address),'') is null or nullif(btrim(state),'') is null or nullif(btrim(country),'') is null))::integer as "incompleteCompanies",

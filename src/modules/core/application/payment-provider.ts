@@ -1,3 +1,33 @@
+export type PaymentAttemptStatus =
+  | 'NOT_ATTEMPTED'
+  | 'PENDING'
+  | 'SUCCESS'
+  | 'FAILED'
+  | 'USER_DROPPED'
+  | 'CANCELLED'
+  | 'VOID'
+  | 'UNKNOWN';
+
+export interface ProviderPaymentAttempt {
+  paymentId: string;
+  status: PaymentAttemptStatus;
+  rawStatus: string;
+  amount: string;
+  currency: string;
+  initiatedAt: string;
+  completedAt: string | null;
+  failureCode: string | null;
+  failureMessage: string | null;
+}
+
+export interface ProviderOrderSnapshot {
+  status: 'ACTIVE' | 'PAID' | 'EXPIRED' | 'TERMINATED' | 'TERMINATION_REQUESTED' | 'UNKNOWN';
+  rawStatus: string;
+  expiresAt: string | null;
+  sessionId?: string;
+  attempts: ProviderPaymentAttempt[];
+}
+
 export interface PaymentProvider {
   readonly name: string;
   createOrder(input: {
@@ -8,12 +38,7 @@ export interface PaymentProvider {
     customerPhone: string;
     customerEmail?: string;
   }): Promise<{ sessionId: string }>;
-  /** The provider is queried directly; webhook content is never trusted as proof of payment. */
-  successfulPayment(orderId: string): Promise<{
-    paymentId: string;
-    amount: string;
-    currency: 'INR';
-    receivedAt: string;
-  } | null>;
+  /** Query the gateway directly; callbacks and browser results are not proof of money received. */
+  inspectOrder(orderId: string): Promise<ProviderOrderSnapshot>;
   verifyWebhook(body: Buffer, signature: string, timestamp: string): boolean;
 }

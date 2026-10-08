@@ -36,7 +36,16 @@ export interface TaxReportQuery extends CommonReportQuery {
 }
 export interface PaymentReportQuery extends CommonReportQuery {
   status?: 'PENDING' | 'CONFIRMED' | 'REVERSED';
-  method?: 'CASH' | 'CHEQUE' | 'DD' | 'CARD' | 'UPI';
+  method?: 'CASH' | 'CHEQUE' | 'DD' | 'CARD' | 'UPI' | 'GATEWAY';
+  sortBy?: string;
+}
+export interface UnifiedPaymentReportQuery extends Omit<CommonReportQuery, 'vehicleId'> {
+  source?: 'MANUAL' | 'GATEWAY';
+  needsReview?: boolean;
+  receiptStatus?: 'PENDING' | 'CONFIRMED' | 'REVERSED';
+  gatewayStatus?:
+    'CREATING' | 'READY' | 'PAID' | 'EXPIRED' | 'TERMINATED' | 'REVIEW_REQUIRED' | 'REFUNDED';
+  method?: PaymentReportQuery['method'];
   sortBy?: string;
 }
 export interface ReceivablesReportQuery extends CommonReportQuery {

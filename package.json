@@ -27,7 +27,9 @@
     "photos:cleanup": "tsx src/scripts/cleanup-photo-uploads.ts",
     "photos:smoke": "tsx src/scripts/smoke-r2-photo.ts",
     "core:admin:create": "tsx src/scripts/create-core-admin.ts",
-    "core:invoice:import": "tsx src/scripts/import-core-invoice.ts"
+    "core:invoice:import": "tsx src/scripts/import-core-invoice.ts",
+    "payments:reconcile": "tsx src/scripts/reconcile-payments.ts",
+    "customer:mail:deliver": "tsx src/scripts/deliver-customer-mail.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1111.0",

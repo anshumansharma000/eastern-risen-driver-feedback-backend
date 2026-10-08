@@ -1,5 +1,7 @@
 # Eastern Risen core API
 
+See [Admin UX API additions](ADMIN_UX_API.md) for directory search, relationship filters, enriched booking pagination and the authoritative payment-review shortcut/count.
+
 > The canonical Core product specification is [PRODUCT.md](PRODUCT.md). This file is
 > a concise technical implementation guide; resolve product behavior and scope from
 > `PRODUCT.md`.
@@ -201,9 +203,9 @@ reconciliation or receipt mutations to display changes.
 
 The customer endpoints are `GET /public/bookings/:token`, `POST /public/bookings/:token/accept`, `POST /public/bookings/:token/milestones/:milestoneId/checkout`, and `POST /public/bookings/:token/orders/:orderId/reconcile`. Checkout returns a Cashfree `payment_session_id` for the hosted checkout integration. A customer link can be copied by staff; no email or WhatsApp delivery is performed by this backend.
 
-Cashfree notifications arrive at `POST /payments/webhooks/cashfree` under the Core prefix. Configure this exact URL in the Cashfree dashboard. The endpoint verifies the signature over the original body and timestamp, then fetches the successful payment from Cashfree before creating an invoice-linked `GATEWAY` receipt. It checks currency and amount, and uses the provider payment ID as the receipt idempotency key. Gateway receipt creation is not available through the staff receipt endpoint. Keep `CASHFREE_ENV`, `CASHFREE_APP_ID`, and `CASHFREE_SECRET_KEY` in server-side environment secrets. `CASHFREE_ENV` is `sandbox` or `production`. Set `CASHFREE_WEBHOOK_URL` to the public notification URL so new orders include `notify_url`.
+Cashfree notifications arrive at `POST /payments/webhooks/cashfree` under the Core prefix. Configure this exact URL in the Cashfree dashboard. The endpoint verifies the signature over the original body and timestamp, then atomically records a deduplicated event identity and schedules PostgreSQL-backed reconciliation. It acknowledges only after that transaction commits; gateway outages do not prevent notification acceptance. The worker fetches the order and all attempts from Cashfree before creating an invoice-linked `GATEWAY` receipt. It checks currency and amount, and uses the provider payment ID as the receipt idempotency key. Gateway receipt creation is not available through the staff receipt endpoint. Keep `CASHFREE_ENV`, `CASHFREE_APP_ID`, and `CASHFREE_SECRET_KEY` in server-side environment secrets. `CASHFREE_ENV` is `sandbox` or `production`. Set `CASHFREE_WEBHOOK_URL` to the public notification URL so new orders include `notify_url`.
 
-If Cashfree confirms money received after the invoice has been cancelled or its outstanding balance has changed, the order is marked `REVIEW_REQUIRED` with the provider payment identifier and timestamp. The system does not invent a receipt or silently discard the collection; finance must resolve it before treating the booking as settled.
+If Cashfree confirms money received after the invoice has been cancelled or its outstanding balance has changed, the successful attempt is marked with accounting status `REVIEW_REQUIRED`, retaining its provider payment identifier and timestamp. The order is also marked `REVIEW_REQUIRED` unless it already has an applied receipt; extra successful attempts never erase the original receipt. The system does not invent a receipt or silently discard the collection; finance must resolve it before treating the booking as settled.
 
 The existing invoice remains the sole tax and receivable record. Cashfree orders are collection records. There is no pre-invoice advance support, automated refund, credit note, invoice PDF, or automatic payment-link messaging in this release. Gateway receipts cannot be reversed through the manual receipt endpoint because that would not return money to the customer. Paid-booking refunds and related tax adjustments require a separate reviewed process before reversing accounting records.
 
@@ -291,6 +293,9 @@ production database credentials must not be exposed to clients.
 
 ## Receipts and settlement discounts
 
+Payments may be dated before the linked issued invoice's date. Receipts retain
+the actual payment date, which determines their financial year and number series.
+
 `POST /receipts` requires an `Idempotency-Key` header (8–128 letters, digits,
 underscores, colons or hyphens). Example:
 
@@ -331,12 +336,23 @@ Other payment states are UNPAID, PARTIALLY_PAID and PAID.
 
 ## Reports
 
+Staff gateway review is available through internal UUID routes:
+`GET /payment-orders/:orderId/review` (all Core read roles),
+`POST /payment-attempts/:attemptId/resolve` (Core Admin only, idempotency key and
+review version required), and `POST /payment-orders/:orderId/reconcile-by-id`
+(Core write roles). The existing `/reconcile` routes still use provider references.
+See [PAYMENT_REVIEW_API.md](PAYMENT_REVIEW_API.md) for full contracts, evidence rules,
+refund attestation limits and migration `0026_aberrant_gladiator.sql`.
+
 - `GET /reports/dashboard` — financial cards, mix breakdowns, current ageing, top
   debtors, payment methods, monthly trend, recent activity and configuration alerts.
 - `GET /reports/invoices` — filtered invoice register with full-result totals.
 - `GET /reports/vehicle-invoices` — vehicle-grouped invoice and settlement totals.
 - `GET /reports/taxes` — applied-tax detail with component/rate/category breakdowns.
-- `GET /reports/payments-received` — receipt-date report and status totals.
+- `GET /reports/payments-received` — receipt-date report and status totals; all receipt
+  states when `status` is omitted (`status=CONFIRMED` preserves the previous default).
+- `GET /reports/payments` — unified staff-only manual receipts and gateway orders,
+  with linked-receipt deduplication and independent receipt/gateway status fields.
 - `GET /reports/receivables` — current receivables, payment state and ageing buckets.
 - `GET /reports/settlement-discounts` — active and reversed commercial discounts.
 - `GET /reports/customers/:id/statement` — invoice-linked customer statement.
@@ -347,10 +363,16 @@ Other payment states are UNPAID, PARTIALLY_PAID and PAID.
 
 Tabular report endpoints accept the allow-listed filters and sorting documented in
 OpenAPI and return `data`, full-filter `summary`, `pagination` and `meta`. The default
-date period is the current financial year. Append `/export` to any tabular report or
+date period is the current financial year, except the unified `/reports/payments`,
+which defaults to all history and uses payment activity dates in `Asia/Kolkata`.
+Append `/export` to any tabular report or
 customer statement path for a CSV export using the same filters; exports are capped
 at 100,000 rows and never silently truncated. See `CORE_REPORTS_ANALYTICS_SPEC.md`
 for calculation and date-basis definitions.
+
+See [FRONTEND_UNIFIED_PAYMENTS_REPORT.md](FRONTEND_UNIFIED_PAYMENTS_REPORT.md) for
+the exact unified contracts, filters, status values, accounting definitions and CSV
+columns. Apply `0025_young_penance.sql` for receipt-link lookup indexes.
 
 Receivables are current-state balances. Arbitrary historical as-of balances are not
 offered because receipt status-transition history is not yet sufficient to
@@ -427,3 +449,63 @@ Tests cover the supplied invoice arithmetic, tax precedence/ambiguity, rounding,
 module boundaries, legacy preservation, role isolation, master version conflicts,
 concurrent numbering and receipts, snapshot immutability, payment transitions,
 settlement reversals, user session revocation and existing feedback workflows.
+
+## Customer account access
+
+See [CUSTOMER_ACCOUNTS_API.md](CUSTOMER_ACCOUNTS_API.md) for the customer namespace,
+Core-admin invitation/membership endpoints, independent customer sessions, and
+private-link compatibility. Customer accounts do not grant Core staff access.
+
+### Payment attempts and reconciliation
+
+Gateway orders have `CREATING`, `READY`, `PAID`, `EXPIRED`, `TERMINATED`, or
+`REVIEW_REQUIRED` status. Each provider payment ID has a separate attempt record:
+`NOT_ATTEMPTED`, `PENDING`, `SUCCESS`, `FAILED`, `USER_DROPPED`, `CANCELLED`, `VOID`,
+or `UNKNOWN`. Unknown provider values retain their raw status and stay unresolved.
+Attempt accounting status is `UNAPPLIED`, `APPLIED`, or `REVIEW_REQUIRED`. Failed
+attempts do not fail the order or affect invoice balances.
+
+All reconciliation endpoints preserve the existing `status` field and add
+`orderStatus`, `latestAttemptStatus`, `accountingStatus`, `hasUnresolvedAttempts`,
+`canRetry`, and `lastCheckedAt` (ISO timestamp or null). Staff and private-link
+responses also contain `receiptId`; customer account responses do not expose
+internal receipt IDs or gateway failure details. `status` can now be `FAILED`,
+`USER_DROPPED`, `CANCELLED`, `VOID`, `NOT_ATTEMPTED`, `EXPIRED`, or `TERMINATED`,
+in addition to `PENDING`, `PAID`, and `REVIEW_REQUIRED`. Clients must not interpret
+all non-PAID states as pending. `canRetry` means a new payment may be attempted;
+an expired/terminated order requires requesting a new checkout through the existing
+checkout endpoint. Fetch current booking details to check the current amount due.
+
+Staff booking detail adds `attempts` (including failure and accounting details) and
+`reconciliation` (next check, lease, retry count and last safe error code). Order
+metadata includes provider status, expiry, last check and `reviewRequiredAt`.
+The existing public `paymentReviewRequired` flag also covers stuck payments and
+additional successful attempts needing staff attention.
+
+Checkout verifies existing unresolved orders before reusing a session or replacing
+an expired order. Pending/unknown attempts block checkout with
+`PAYMENT_ATTEMPT_PENDING`; unresolved accounting blocks with
+`PAYMENT_REVIEW_REQUIRED`. An expired session still reported active by the provider
+returns `PAYMENT_ORDER_UNAVAILABLE` until verified. A provider outage returns an
+error and preserves the last known state; it never becomes a payment failure.
+
+The worker polls due jobs one at a time. Checks occur approximately every minute
+for the first five minutes, every five minutes until thirty minutes, every fifteen
+minutes until two hours, hourly until one day, then daily. Failures use exponential
+backoff capped at one hour. Pending/unknown outcomes continue indefinitely and are
+flagged for review after `PAYMENT_PENDING_REVIEW_AFTER_HOURS` (default 24). Ten
+consecutive reconciliation failures also flag the order. Closed orders are checked
+daily until `PAYMENT_CLOSED_RECHECK_DAYS` (default 7) days after creation; callbacks
+and manual reconciliation can reactivate checks afterward. Accounting review is
+not automatically cleared; refunds and staff accounting resolution remain separate
+reviewed workflows.
+
+Jobs use two-minute leases, skip locked rows and fence completion with lease tokens.
+New callbacks/manual checks increment a revision so a running worker cannot erase
+newly requested work. Receipt creation, attempt application and order completion
+commit together. Older observations cannot overwrite newer ones, and a verified
+success cannot be downgraded by a subsequent pending/failed observation.
+
+## Structured commercial billing
+
+Structured quote versions, proposed plans, versioned private acceptance, billing review and transactional payment enablement are documented in [COMMERCIAL_BILLING_API.md](COMMERCIAL_BILLING_API.md), including frontend TypeScript contracts, JSON examples and migration rollout. Existing manual billing remains supported.

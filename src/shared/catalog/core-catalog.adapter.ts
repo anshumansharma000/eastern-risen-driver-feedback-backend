@@ -38,8 +38,13 @@ export function createSharedCatalogAdapter(
     async requireVehicle(id) {
       await vehicleService.get(id);
     },
-    async listVendors(page, pageSize) {
-      const result = await vendorService.list({ page, pageSize });
+    async listVendors(page, pageSize, q, status) {
+      const result = await vendorService.list({
+        page,
+        pageSize,
+        ...(q === undefined ? {} : { q }),
+        ...(status === undefined ? {} : { status }),
+      });
       return { ...result, items: result.items.map(present) };
     },
     async createVendor(input, actorId) {
@@ -62,8 +67,13 @@ export function createSharedCatalogAdapter(
     async setVendorStatus(id, status, actorId) {
       return present(await vendorService.changeStatus(id, status, actorId));
     },
-    async listVehicles(page, pageSize) {
-      const result = await vehicleService.list({ page, pageSize });
+    async listVehicles(page, pageSize, q, status) {
+      const result = await vehicleService.list({
+        page,
+        pageSize,
+        ...(q === undefined ? {} : { q }),
+        ...(status === undefined ? {} : { status }),
+      });
       return { ...result, items: result.items.map(present) };
     },
     async createVehicle(input, actorId) {

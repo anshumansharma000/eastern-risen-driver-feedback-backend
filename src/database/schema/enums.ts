@@ -6,6 +6,7 @@ export const accountRole = pgEnum('account_role', [
   'CORE_ADMIN',
   'CORE_REPORT_VIEWER',
   'CORE_DATA_ENTRY',
+  'CUSTOMER',
 ]);
 export const lifecycleStatus = pgEnum('lifecycle_status', ['ACTIVE', 'DEACTIVATED', 'ARCHIVED']);
 export const driverSourceType = pgEnum('driver_source_type', ['AGENCY', 'OUTSOURCED']);

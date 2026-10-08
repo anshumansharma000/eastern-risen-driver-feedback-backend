@@ -8,6 +8,7 @@ export const principalSchema = Type.Object({
     Type.Literal('CORE_ADMIN'),
     Type.Literal('CORE_REPORT_VIEWER'),
     Type.Literal('CORE_DATA_ENTRY'),
+    Type.Literal('CUSTOMER'),
   ]),
   displayName: Type.String(),
   driverId: Type.Union([Type.String({ format: 'uuid' }), Type.Null()]),

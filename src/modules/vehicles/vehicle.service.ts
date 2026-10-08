@@ -1,4 +1,5 @@
-import { asc, count, eq, ne } from 'drizzle-orm';
+import { textSearch } from '../../shared/database/search.js';
+import { and, asc, count, eq, ne } from 'drizzle-orm';
 import type { AppDatabase } from '../../database/client.js';
 import { auditEvents, vehicles } from '../../database/schema/index.js';
 import { isPostgresError } from '../../shared/database/postgres-error.js';
@@ -31,6 +32,7 @@ export interface UpdateVehicleInput {
 
 export interface ListVehiclesInput {
   readonly status?: AccountStatus;
+  readonly q?: string;
   readonly page: number;
   readonly pageSize: number;
 }
@@ -123,9 +125,16 @@ export class VehicleService {
   }
 
   async list(input: ListVehiclesInput) {
-    const filter = input.status
-      ? eq(vehicles.status, input.status)
-      : ne(vehicles.status, 'ARCHIVED');
+    const filter = and(
+      input.status ? eq(vehicles.status, input.status) : ne(vehicles.status, 'ARCHIVED'),
+      textSearch(input.q, [
+        vehicles.registrationNumber,
+        vehicles.displayName,
+        vehicles.registeredOwner,
+        vehicles.contactNumber,
+        vehicles.vehicleType,
+      ]),
+    );
     const offset = (input.page - 1) * input.pageSize;
     const [items, [total]] = await Promise.all([
       this.db

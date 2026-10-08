@@ -188,3 +188,40 @@ For every release, record:
 - operator;
 - smoke-test result; and
 - rollback revision.
+
+## Customer invitation and recovery email
+
+Follow [EMAIL_SETUP.md](EMAIL_SETUP.md) to verify the Resend sending domain and set
+`CUSTOMER_MAIL_PROVIDER`, `RESEND_API_KEY`, `CUSTOMER_MAIL_FROM`, optional
+`CUSTOMER_MAIL_REPLY_TO`, and `CUSTOMER_ACCOUNT_URL` on the API runtime service.
+Store the key as an encrypted secret. The built-in worker is enabled by default
+and sends one queued message per 10-second check, so no additional paid service
+component is required. Confirm live invitation and recovery delivery before launch.
+
+
+## Payment reconciliation
+
+Apply migration `0023_tranquil_invaders` before starting the updated backend.
+It adds attempt tracking, a durable notification inbox and reconciliation jobs,
+queues existing orders, and preserves the receipt links of existing paid orders.
+No Redis, queue service or additional database is required.
+
+With Cashfree configured, `PAYMENT_RECONCILIATION_WORKER_ENABLED=true` starts the
+worker inside each backend instance. `PAYMENT_RECONCILIATION_POLL_INTERVAL_MS`
+defaults to 1000; it controls queue polling, not the provider check frequency for
+each payment. Set `PAYMENT_PENDING_REVIEW_AFTER_HOURS` (default 24) and
+`PAYMENT_CLOSED_RECHECK_DAYS` (default 7) to adjust operational review and late-outcome
+checks. Keep at least one instance running. Database leases permit multiple instances.
+
+For a sleeping backend or an external scheduler, disable the in-process worker and
+run `npm run payments:reconcile` every minute. In a built runtime image use
+`node dist/scripts/reconcile-payments.js`. Each invocation processes up to 25 due jobs
+and returns only processed/failed totals. A nonzero exit indicates reconciliation
+errors; saved jobs retry later. Scheduled invocations may overlap safely.
+
+Enable success, failure and user-dropped payment notifications in Cashfree and
+configure the signed notification URL. Monitor `PAYMENT_RECONCILIATION_FAILED` and
+`PAYMENT_RECONCILIATION_WORKER_FAILED` logs and inspect staff booking detail for
+stale checks, queue failures and review flags. Review cases do not automatically
+refund or apply additional money. Notification records store only hashes and order
+identities; raw customer/payment payloads are not persisted.

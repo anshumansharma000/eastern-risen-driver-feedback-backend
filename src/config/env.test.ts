@@ -201,3 +201,109 @@ const productionR2Environment = {
   R2_ACCESS_KEY_ID: 'access-key',
   R2_SECRET_ACCESS_KEY: 'secret-key',
 };
+
+describe('customer email configuration', () => {
+  const base = { DATABASE_URL: 'postgresql://localhost/test' };
+  const resend = {
+    ...base,
+    CUSTOMER_ACCOUNT_URL: 'https://portal.example.com/account',
+    CUSTOMER_MAIL_PROVIDER: 'resend',
+    RESEND_API_KEY: 'test-key',
+    CUSTOMER_MAIL_FROM: 'Accounts <accounts@example.com>',
+  };
+  it('keeps manual mode available with no email credentials', () => {
+    expect(loadConfig(base).customerMail).toBeNull();
+  });
+  it('loads Resend and enables the in-process worker by default', () => {
+    expect(loadConfig(resend)).toMatchObject({
+      customerMail: { provider: 'resend', apiKey: 'test-key', from: resend.CUSTOMER_MAIL_FROM },
+      customerMailWorkerEnabled: true,
+      customerMailPollIntervalMs: 10000,
+    });
+    expect(
+      loadConfig({
+        ...resend,
+        CUSTOMER_MAIL_REPLY_TO: 'help@example.com',
+        CUSTOMER_MAIL_WORKER_ENABLED: 'false',
+      }),
+    ).toMatchObject({
+      customerMail: { replyTo: 'help@example.com' },
+      customerMailWorkerEnabled: false,
+    });
+  });
+  it.each(['RESEND_API_KEY', 'CUSTOMER_MAIL_FROM', 'CUSTOMER_ACCOUNT_URL'])(
+    'rejects incomplete Resend configuration: %s',
+    (key) => {
+      expect(() => loadConfig({ ...resend, [key]: '' })).toThrow();
+    },
+  );
+  it('requires an explicit supported provider for new integrations', () => {
+    expect(() => loadConfig({ ...resend, CUSTOMER_MAIL_PROVIDER: '' })).toThrow(
+      'CUSTOMER_MAIL_PROVIDER',
+    );
+    expect(() => loadConfig({ ...resend, CUSTOMER_MAIL_PROVIDER: 'unknown' })).toThrow(
+      'CUSTOMER_MAIL_PROVIDER',
+    );
+  });
+  it.each([
+    'bad-address',
+    'a@example.com\r\nBcc: b@example.com',
+    'a@example.com,b@example.com',
+    'Name <a@example.com',
+  ])('rejects unsafe sender values: %s', (from) => {
+    expect(() => loadConfig({ ...resend, CUSTOMER_MAIL_FROM: from })).toThrow('CUSTOMER_MAIL_FROM');
+  });
+  it('preserves existing relay deployments and supports configuration-only switching', () => {
+    const relay = {
+      ...base,
+      CUSTOMER_ACCOUNT_URL: resend.CUSTOMER_ACCOUNT_URL,
+      CUSTOMER_MAIL_ENDPOINT: 'https://relay.example.com/mail',
+      CUSTOMER_MAIL_TOKEN: 'token',
+    };
+    expect(loadConfig(relay).customerMail).toEqual({
+      provider: 'relay',
+      endpoint: relay.CUSTOMER_MAIL_ENDPOINT,
+      token: 'token',
+    });
+    expect(
+      loadConfig({ ...resend, ...relay, CUSTOMER_MAIL_PROVIDER: 'relay' }).customerMail?.provider,
+    ).toBe('relay');
+  });
+  it('rejects invalid worker settings', () => {
+    expect(() => loadConfig({ ...base, CUSTOMER_MAIL_WORKER_ENABLED: 'yes' })).toThrow();
+    expect(() => loadConfig({ ...base, CUSTOMER_MAIL_POLL_INTERVAL_MS: '0' })).toThrow();
+  });
+});
+
+describe('payment reconciliation configuration', () => {
+  it('enables the worker by default and accepts explicit overrides', () => {
+    const config = loadConfig({
+      NODE_ENV: 'test',
+      DATABASE_URL: 'postgresql://test:test@localhost/test',
+    });
+    expect(config.paymentReconciliationWorkerEnabled).toBe(true);
+    expect(config.paymentReconciliationPollIntervalMs).toBe(1000);
+    const disabled = loadConfig({
+      NODE_ENV: 'test',
+      DATABASE_URL: 'postgresql://test:test@localhost/test',
+      PAYMENT_RECONCILIATION_WORKER_ENABLED: 'false',
+      PAYMENT_RECONCILIATION_POLL_INTERVAL_MS: '5000',
+    });
+    expect(disabled.paymentReconciliationWorkerEnabled).toBe(false);
+    expect(disabled.paymentReconciliationPollIntervalMs).toBe(5000);
+  });
+  it('rejects malformed settings', () => {
+    for (const settings of [
+      { PAYMENT_RECONCILIATION_WORKER_ENABLED: 'yes' },
+      { PAYMENT_RECONCILIATION_POLL_INTERVAL_MS: '0' },
+    ]) {
+      expect(() =>
+        loadConfig({
+          NODE_ENV: 'test',
+          DATABASE_URL: 'postgresql://test:test@localhost/test',
+          ...settings,
+        }),
+      ).toThrow();
+    }
+  });
+});

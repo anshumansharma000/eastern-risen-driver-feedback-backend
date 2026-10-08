@@ -1,0 +1,504 @@
+{
+  "applicablePayment": {
+    "data": {
+      "version": "46fff3044a88ed4920197bac34717089b42290226ad4be75ba14c009f3e656c7",
+      "order": {
+        "id": "ba6906fc-56b3-4b37-8018-5e0078c1c17f",
+        "provider": "cashfree",
+        "providerOrderId": "er_ba6906fc56b34b3780185e0078c1c17f",
+        "providerStatus": "PAID",
+        "gatewayStatus": "REVIEW_REQUIRED",
+        "amount": "30.01",
+        "receiptId": null,
+        "paidAt": "2026-10-07T06:31:00.000Z"
+      },
+      "booking": {
+        "id": "eece7ff3-123e-4994-8aeb-bdd4bc8741ce",
+        "reference": "milestone-53ff0b1b-ec3c-46c5-aa0b-555413f59901",
+        "status": "INVOICED",
+        "companyId": "44dfbc4f-c156-4642-bd58-d444bb89e753"
+      },
+      "customer": {
+        "id": "94e0bfbc-dc50-4468-8aa0-8f33d07e8f8d",
+        "name": "Milestone Customer"
+      },
+      "invoice": {
+        "id": "a4dc7404-0579-4b6a-862a-f076ed94148d",
+        "number": "I/2627/000051",
+        "status": "ISSUED",
+        "invoiceDate": "2026-10-08",
+        "grandTotal": "100.01",
+        "receivedAmount": "0.00",
+        "adjustmentAmount": "0.00",
+        "dueAmount": "100.01",
+        "paymentStatus": "UNPAID"
+      },
+      "attempts": [
+        {
+          "id": "cf33479c-10a1-47d6-83d1-36ce46cb0adc",
+          "providerPaymentId": "remaining-er_ba6906fc56b34b3780185e0078c1c17f",
+          "status": "SUCCESS",
+          "accountingStatus": "REVIEW_REQUIRED",
+          "amount": "10.00",
+          "currency": "INR",
+          "initiatedAt": "2026-10-07T06:30:00.000Z",
+          "completedAt": "2026-10-07T06:31:00.000Z",
+          "reviewReasons": [
+            {
+              "code": "ORDER_ALREADY_UNDER_REVIEW",
+              "details": {}
+            },
+            {
+              "code": "AMOUNT_MISMATCH",
+              "details": {
+                "actual": "10.00",
+                "expected": "30.01"
+              }
+            }
+          ],
+          "receipt": null,
+          "receiptAccountingState": null,
+          "resolution": null,
+          "actions": [
+            {
+              "action": "APPLY_TO_LINKED_INVOICE",
+              "allowed": true,
+              "blockers": []
+            },
+            {
+              "action": "LINK_EXISTING_RECEIPT",
+              "allowed": false,
+              "blockers": ["NO_MATCHING_AUTHORITATIVE_RECEIPT"]
+            },
+            {
+              "action": "RECORD_VERIFIED_EXTERNAL_REFUND",
+              "allowed": true,
+              "blockers": []
+            }
+          ],
+          "matchingReceipts": [],
+          "existingPaymentReceipts": []
+        },
+        {
+          "id": "e25e772a-6bdb-420b-9a7e-31b9352a628b",
+          "providerPaymentId": "attempt-er_ba6906fc56b34b3780185e0078c1c17f",
+          "status": "SUCCESS",
+          "accountingStatus": "REFUNDED",
+          "amount": "30.00",
+          "currency": "INR",
+          "initiatedAt": "2026-10-07T06:30:00.000Z",
+          "completedAt": "2026-10-07T06:31:00.000Z",
+          "reviewReasons": [
+            {
+              "code": "AMOUNT_MISMATCH",
+              "details": {
+                "actual": "30.00",
+                "expected": "30.01"
+              }
+            }
+          ],
+          "receipt": null,
+          "receiptAccountingState": null,
+          "resolution": {
+            "id": "71e91ec0-9522-484d-9a2b-22403b599cc6",
+            "attemptId": "e25e772a-6bdb-420b-9a7e-31b9352a628b",
+            "orderId": "ba6906fc-56b3-4b37-8018-5e0078c1c17f",
+            "action": "RECORD_VERIFIED_EXTERNAL_REFUND",
+            "actorId": "d1125ba2-a350-4dcb-92ed-45dd5138212e",
+            "note": "Verified payment and accounting evidence",
+            "receiptId": null,
+            "amount": "30.00",
+            "currency": "INR",
+            "provider": "cashfree",
+            "providerRefundReference": "external-8f7526cc-164a-4c0e-a657-91597bdab772",
+            "refund": {
+              "amount": "30.00",
+              "currency": "INR",
+              "completedAt": "2026-10-07T06:32:00.000Z",
+              "verification": {
+                "kind": "STAFF_ATTESTATION",
+                "attested": true,
+                "evidenceReference": "Bank settlement evidence: verified refund statement"
+              },
+              "providerRefundReference": "external-8f7526cc-164a-4c0e-a657-91597bdab772"
+            },
+            "before": {
+              "receiptId": null,
+              "receivedAt": "2026-10-07T06:31:00.000Z",
+              "gatewayStatus": "REVIEW_REQUIRED",
+              "reviewReasons": [
+                {
+                  "code": "AMOUNT_MISMATCH",
+                  "details": {
+                    "actual": "30.00",
+                    "expected": "30.01"
+                  }
+                }
+              ],
+              "invoiceBalance": {
+                "id": "a4dc7404-0579-4b6a-862a-f076ed94148d",
+                "number": "I/2627/000051",
+                "status": "ISSUED",
+                "dueAmount": "100.01",
+                "grandTotal": "100.01",
+                "invoiceDate": "2026-10-08",
+                "paymentStatus": "UNPAID",
+                "receivedAmount": "0.00",
+                "adjustmentAmount": "0.00"
+              },
+              "providerOrderId": "er_ba6906fc56b34b3780185e0078c1c17f",
+              "accountingStatus": "REVIEW_REQUIRED",
+              "providerPaymentId": "attempt-er_ba6906fc56b34b3780185e0078c1c17f"
+            },
+            "after": {
+              "receiptId": null,
+              "gatewayStatus": "REVIEW_REQUIRED",
+              "invoiceBalance": {
+                "status": "ISSUED",
+                "dueAmount": "100.01",
+                "paymentStatus": "UNPAID",
+                "receivedAmount": "0.00",
+                "adjustmentAmount": "0.00"
+              },
+              "accountingStatus": "REFUNDED"
+            },
+            "createdAt": "2026-10-07T13:21:44.398Z"
+          },
+          "actions": [
+            {
+              "action": "APPLY_TO_LINKED_INVOICE",
+              "allowed": false,
+              "blockers": ["ALREADY_RESOLVED", "ATTEMPT_NOT_REVIEWABLE", "OTHER_UNRESOLVED_SUCCESS"]
+            },
+            {
+              "action": "LINK_EXISTING_RECEIPT",
+              "allowed": false,
+              "blockers": [
+                "ALREADY_RESOLVED",
+                "ATTEMPT_NOT_REVIEWABLE",
+                "OTHER_UNRESOLVED_SUCCESS",
+                "NO_MATCHING_AUTHORITATIVE_RECEIPT"
+              ]
+            },
+            {
+              "action": "RECORD_VERIFIED_EXTERNAL_REFUND",
+              "allowed": false,
+              "blockers": ["ALREADY_RESOLVED", "ATTEMPT_NOT_REVIEWABLE"]
+            }
+          ],
+          "matchingReceipts": [],
+          "existingPaymentReceipts": []
+        }
+      ],
+      "history": [
+        {
+          "id": "71e91ec0-9522-484d-9a2b-22403b599cc6",
+          "attemptId": "e25e772a-6bdb-420b-9a7e-31b9352a628b",
+          "orderId": "ba6906fc-56b3-4b37-8018-5e0078c1c17f",
+          "action": "RECORD_VERIFIED_EXTERNAL_REFUND",
+          "actorId": "d1125ba2-a350-4dcb-92ed-45dd5138212e",
+          "note": "Verified payment and accounting evidence",
+          "receiptId": null,
+          "amount": "30.00",
+          "currency": "INR",
+          "provider": "cashfree",
+          "providerRefundReference": "external-8f7526cc-164a-4c0e-a657-91597bdab772",
+          "refund": {
+            "amount": "30.00",
+            "currency": "INR",
+            "completedAt": "2026-10-07T06:32:00.000Z",
+            "verification": {
+              "kind": "STAFF_ATTESTATION",
+              "attested": true,
+              "evidenceReference": "Bank settlement evidence: verified refund statement"
+            },
+            "providerRefundReference": "external-8f7526cc-164a-4c0e-a657-91597bdab772"
+          },
+          "before": {
+            "receiptId": null,
+            "receivedAt": "2026-10-07T06:31:00.000Z",
+            "gatewayStatus": "REVIEW_REQUIRED",
+            "reviewReasons": [
+              {
+                "code": "AMOUNT_MISMATCH",
+                "details": {
+                  "actual": "30.00",
+                  "expected": "30.01"
+                }
+              }
+            ],
+            "invoiceBalance": {
+              "id": "a4dc7404-0579-4b6a-862a-f076ed94148d",
+              "number": "I/2627/000051",
+              "status": "ISSUED",
+              "dueAmount": "100.01",
+              "grandTotal": "100.01",
+              "invoiceDate": "2026-10-08",
+              "paymentStatus": "UNPAID",
+              "receivedAmount": "0.00",
+              "adjustmentAmount": "0.00"
+            },
+            "providerOrderId": "er_ba6906fc56b34b3780185e0078c1c17f",
+            "accountingStatus": "REVIEW_REQUIRED",
+            "providerPaymentId": "attempt-er_ba6906fc56b34b3780185e0078c1c17f"
+          },
+          "after": {
+            "receiptId": null,
+            "gatewayStatus": "REVIEW_REQUIRED",
+            "invoiceBalance": {
+              "status": "ISSUED",
+              "dueAmount": "100.01",
+              "paymentStatus": "UNPAID",
+              "receivedAmount": "0.00",
+              "adjustmentAmount": "0.00"
+            },
+            "accountingStatus": "REFUNDED"
+          },
+          "createdAt": "2026-10-07T13:21:44.398Z"
+        }
+      ],
+      "refundVerificationPolicy": "STAFF_ATTESTATION_ONLY"
+    }
+  },
+  "ineligibleInvoice": {
+    "data": {
+      "version": "8b2fbcf3d960623915c68a8708c0f4b846c82d0f55e486884f30f10d0cb96957",
+      "order": {
+        "id": "b9951968-dfb5-44da-b032-8511775bb1c5",
+        "provider": "cashfree",
+        "providerOrderId": "er_b9951968dfb544dab0328511775bb1c5",
+        "providerStatus": "PAID",
+        "gatewayStatus": "REVIEW_REQUIRED",
+        "amount": "30.01",
+        "receiptId": null,
+        "paidAt": "2026-10-07T06:31:00.000Z"
+      },
+      "booking": {
+        "id": "c0e59f10-8521-4964-b9eb-e6dfd11bf068",
+        "reference": "milestone-64b987ca-8a5d-47cd-b679-2cb2f20dae23",
+        "status": "INVOICED",
+        "companyId": "44dfbc4f-c156-4642-bd58-d444bb89e753"
+      },
+      "customer": {
+        "id": "94e0bfbc-dc50-4468-8aa0-8f33d07e8f8d",
+        "name": "Milestone Customer"
+      },
+      "invoice": {
+        "id": "9d324322-53fa-4981-8015-689dbf219f49",
+        "number": "I/2627/000037",
+        "status": "CANCELLED",
+        "invoiceDate": "2026-10-07",
+        "grandTotal": "100.01",
+        "receivedAmount": "0.00",
+        "adjustmentAmount": "0.00",
+        "dueAmount": "0.00",
+        "paymentStatus": "NOT_APPLICABLE"
+      },
+      "attempts": [
+        {
+          "id": "78f302b9-1a5c-4faa-9127-a93418823682",
+          "providerPaymentId": "attempt-er_b9951968dfb544dab0328511775bb1c5",
+          "status": "SUCCESS",
+          "accountingStatus": "REVIEW_REQUIRED",
+          "amount": "30.01",
+          "currency": "INR",
+          "initiatedAt": "2026-10-07T06:30:00.000Z",
+          "completedAt": "2026-10-07T06:31:00.000Z",
+          "reviewReasons": [
+            {
+              "code": "INVOICE_NOT_ISSUED",
+              "details": {
+                "errorCode": "INVOICE_NOT_ISSUED"
+              }
+            }
+          ],
+          "receipt": null,
+          "receiptAccountingState": null,
+          "resolution": null,
+          "actions": [
+            {
+              "action": "APPLY_TO_LINKED_INVOICE",
+              "allowed": false,
+              "blockers": ["INVOICE_NOT_ISSUED", "OVERPAYMENT"]
+            },
+            {
+              "action": "LINK_EXISTING_RECEIPT",
+              "allowed": false,
+              "blockers": ["INVOICE_NOT_ISSUED", "NO_MATCHING_AUTHORITATIVE_RECEIPT"]
+            },
+            {
+              "action": "RECORD_VERIFIED_EXTERNAL_REFUND",
+              "allowed": true,
+              "blockers": []
+            }
+          ],
+          "matchingReceipts": [],
+          "existingPaymentReceipts": []
+        }
+      ],
+      "history": [],
+      "refundVerificationPolicy": "STAFF_ATTESTATION_ONLY"
+    }
+  },
+  "additionalSuccessfulPayment": {
+    "data": {
+      "version": "33fe92f91ea4d6a3ed3d4e1a0dd04ebea5f36ac2285220201791699553032519",
+      "order": {
+        "id": "fa47f9ce-6e9c-496e-a8ce-89732896aec6",
+        "provider": "cashfree",
+        "providerOrderId": "er_fa47f9ce6e9c496ea8ce89732896aec6",
+        "providerStatus": "PAID",
+        "gatewayStatus": "PAID",
+        "amount": "30.01",
+        "receiptId": "c105e307-15d6-480b-a6b0-88e6a350f802",
+        "paidAt": "2026-10-07T06:31:00.000Z"
+      },
+      "booking": {
+        "id": "8db735de-41e7-4bf9-846a-91e34f175c1f",
+        "reference": "milestone-f72c0916-1228-43cc-86fa-e8cf65d40483",
+        "status": "INVOICED",
+        "companyId": "44dfbc4f-c156-4642-bd58-d444bb89e753"
+      },
+      "customer": {
+        "id": "94e0bfbc-dc50-4468-8aa0-8f33d07e8f8d",
+        "name": "Milestone Customer"
+      },
+      "invoice": {
+        "id": "0132fb9d-2616-47b1-a427-e02ebbe62b49",
+        "number": "I/2627/000016",
+        "status": "ISSUED",
+        "invoiceDate": "2026-10-07",
+        "grandTotal": "100.01",
+        "receivedAmount": "30.01",
+        "adjustmentAmount": "0.00",
+        "dueAmount": "70.00",
+        "paymentStatus": "PARTIALLY_PAID"
+      },
+      "attempts": [
+        {
+          "id": "662eca75-e720-4b70-b672-740a18632283",
+          "providerPaymentId": "extra-er_fa47f9ce6e9c496ea8ce89732896aec6",
+          "status": "SUCCESS",
+          "accountingStatus": "REVIEW_REQUIRED",
+          "amount": "30.01",
+          "currency": "INR",
+          "initiatedAt": "2026-10-07T06:30:00.000Z",
+          "completedAt": "2026-10-07T06:31:00.000Z",
+          "reviewReasons": [
+            {
+              "code": "ADDITIONAL_SUCCESS",
+              "details": {}
+            }
+          ],
+          "receipt": null,
+          "receiptAccountingState": null,
+          "resolution": null,
+          "actions": [
+            {
+              "action": "APPLY_TO_LINKED_INVOICE",
+              "allowed": false,
+              "blockers": [
+                "ORDER_ALREADY_HAS_RECEIPT",
+                "ADDITIONAL_SUCCESS",
+                "OTHER_UNRESOLVED_SUCCESS"
+              ]
+            },
+            {
+              "action": "LINK_EXISTING_RECEIPT",
+              "allowed": false,
+              "blockers": [
+                "ORDER_ALREADY_HAS_RECEIPT",
+                "ADDITIONAL_SUCCESS",
+                "OTHER_UNRESOLVED_SUCCESS",
+                "NO_MATCHING_AUTHORITATIVE_RECEIPT"
+              ]
+            },
+            {
+              "action": "RECORD_VERIFIED_EXTERNAL_REFUND",
+              "allowed": true,
+              "blockers": []
+            }
+          ],
+          "matchingReceipts": [],
+          "existingPaymentReceipts": []
+        },
+        {
+          "id": "e0cfc11e-89aa-4eb8-897e-41a25ce3f516",
+          "providerPaymentId": "attempt-er_fa47f9ce6e9c496ea8ce89732896aec6",
+          "status": "SUCCESS",
+          "accountingStatus": "APPLIED",
+          "amount": "30.01",
+          "currency": "INR",
+          "initiatedAt": "2026-10-07T06:30:00.000Z",
+          "completedAt": "2026-10-07T06:31:00.000Z",
+          "reviewReasons": [],
+          "receipt": {
+            "id": "c105e307-15d6-480b-a6b0-88e6a350f802",
+            "invoiceId": "0132fb9d-2616-47b1-a427-e02ebbe62b49",
+            "number": "R/2627/000005",
+            "status": "CONFIRMED",
+            "amount": "30.01",
+            "receivedDate": "2026-10-07",
+            "method": "GATEWAY",
+            "reversalReason": null
+          },
+          "receiptAccountingState": "CONFIRMED",
+          "resolution": null,
+          "actions": [
+            {
+              "action": "APPLY_TO_LINKED_INVOICE",
+              "allowed": false,
+              "blockers": [
+                "ATTEMPT_NOT_REVIEWABLE",
+                "ORDER_ALREADY_HAS_RECEIPT",
+                "OTHER_UNRESOLVED_SUCCESS",
+                "EXISTING_MATCHING_RECEIPT_USE_LINK"
+              ]
+            },
+            {
+              "action": "LINK_EXISTING_RECEIPT",
+              "allowed": false,
+              "blockers": [
+                "ATTEMPT_NOT_REVIEWABLE",
+                "ORDER_ALREADY_HAS_RECEIPT",
+                "OTHER_UNRESOLVED_SUCCESS"
+              ]
+            },
+            {
+              "action": "RECORD_VERIFIED_EXTERNAL_REFUND",
+              "allowed": false,
+              "blockers": ["ATTEMPT_NOT_REVIEWABLE", "RECEIPT_NOT_REVERSED"]
+            }
+          ],
+          "matchingReceipts": [
+            {
+              "id": "c105e307-15d6-480b-a6b0-88e6a350f802",
+              "invoiceId": "0132fb9d-2616-47b1-a427-e02ebbe62b49",
+              "number": "R/2627/000005",
+              "status": "CONFIRMED",
+              "amount": "30.01",
+              "receivedDate": "2026-10-07",
+              "method": "GATEWAY",
+              "reversalReason": null,
+              "evidenceKind": "BACKEND_GATEWAY_RECEIPT_IDENTITY"
+            }
+          ],
+          "existingPaymentReceipts": [
+            {
+              "id": "c105e307-15d6-480b-a6b0-88e6a350f802",
+              "invoiceId": "0132fb9d-2616-47b1-a427-e02ebbe62b49",
+              "number": "R/2627/000005",
+              "status": "CONFIRMED",
+              "amount": "30.01",
+              "receivedDate": "2026-10-07",
+              "method": "GATEWAY",
+              "reversalReason": null
+            }
+          ]
+        }
+      ],
+      "history": [],
+      "refundVerificationPolicy": "STAFF_ATTESTATION_ONLY"
+    }
+  }
+}

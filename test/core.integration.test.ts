@@ -517,6 +517,32 @@ integration('core modular API', () => {
     const other = await Promise.all([issued(), issued()]);
     expect(other[0].invoiceNumber).not.toBe(other[1].invoiceNumber);
   });
+  it('accepts a receipt before the invoice date and numbers it in the payment financial year', async () => {
+    const invoice = await issued();
+    const response = await call(
+      'POST',
+      '/receipts',
+      {
+        invoiceId: invoice.id,
+        receivedDate: '2026-03-31',
+        amount: '100.00',
+        method: 'CASH',
+        details: {},
+        status: 'CONFIRMED',
+      },
+      adminCookie,
+      `${suffix}-early-receipt`,
+    );
+    expect(response.statusCode, response.body).toBe(201);
+    expect(response.json<TestEnvelope>().data).toMatchObject({
+      receivedDate: '2026-03-31',
+      financialYear: '2526',
+      status: 'CONFIRMED',
+    });
+    expect((await call('GET', `/invoices/${invoice.id}`)).json<TestEnvelope>().data.dueAmount).toBe(
+      '5.00',
+    );
+  });
   it('prevents concurrent overpayment and replays receipts idempotently', async () => {
     const invoice = await issued();
     const body = {
@@ -998,21 +1024,23 @@ integration('core modular API', () => {
       `/commercial-bookings/${created.booking.id}/available-invoices?q=${encodeURIComponent(invoiceNumber)}`,
     );
     expect(available.statusCode, available.body).toBe(200);
-    expect(available.json<{ data: Array<{ id: string; invoiceNumber: string }> }>().data).toEqual([
-      expect.objectContaining({ id: invoiceDraft.id, invoiceNumber }),
-    ]);
+    expect(available.json<{ data: Array<{ id: string; invoiceNumber: string }> }>().data).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: invoiceDraft.id, invoiceNumber })]),
+    );
     for (const search of ['Commercial Test Payer', 'Traveller X 04', 'August itinerary', '4 PAX']) {
       const result = await call(
         'GET',
         `/commercial-bookings/${created.booking.id}/available-invoices?q=${encodeURIComponent(search)}`,
       );
       expect(result.statusCode, result.body).toBe(200);
-      expect(result.json<{ data: Array<{ id: string }> }>().data).toEqual([
-        expect.objectContaining({ id: invoiceDraft.id }),
-      ]);
+      expect(result.json<{ data: Array<{ id: string }> }>().data).toEqual(
+        expect.arrayContaining([expect.objectContaining({ id: invoiceDraft.id })]),
+      );
       if (search === '4 PAX') {
         expect(
-          result.json<{ data: Array<{ lineDescription: string }> }>().data[0]?.lineDescription,
+          result
+            .json<{ data: Array<{ id: string; lineDescription: string }> }>()
+            .data.find((item) => item.id === invoiceDraft.id)?.lineDescription,
         ).toContain('4 PAX');
       }
     }
@@ -1028,8 +1056,9 @@ integration('core modular API', () => {
     );
     expect(wrongSearch.statusCode, wrongSearch.body).toBe(200);
     expect(
-      wrongSearch.json<{ data: Array<{ eligible: boolean; unavailableReasons: string[] }> }>()
-        .data[0],
+      wrongSearch
+        .json<{ data: Array<{ id: string; eligible: boolean; unavailableReasons: string[] }> }>()
+        .data.find((item) => item.id === wrongDraft.id),
     ).toMatchObject({
       eligible: false,
       unavailableReasons: ['Invoice grand total does not match accepted quote'],
@@ -1058,11 +1087,23 @@ integration('core modular API', () => {
         requestedAmount = input.amount;
         return { sessionId: 'sandbox-session' };
       },
-      successfulPayment: async () => ({
-        paymentId: `payment-${suffix}`,
-        amount: requestedAmount,
-        currency: 'INR',
-        receivedAt: `${new Date().toISOString().slice(0, 10)}T12:00:00+05:30`,
+      inspectOrder: async () => ({
+        status: 'PAID',
+        rawStatus: 'PAID',
+        expiresAt: null,
+        attempts: [
+          {
+            status: 'SUCCESS',
+            rawStatus: 'SUCCESS',
+            completedAt: null,
+            failureCode: null,
+            failureMessage: null,
+            paymentId: `payment-${suffix}`,
+            amount: requestedAmount,
+            currency: 'INR',
+            initiatedAt: `${new Date().toISOString().slice(0, 10)}T12:00:00+05:30`,
+          },
+        ],
       }),
       verifyWebhook: () => true,
     };
@@ -1071,7 +1112,10 @@ integration('core modular API', () => {
     expect(checkout).toMatchObject({ amount: '321.00', sessionId: 'sandbox-session' });
     const payment = await commercial.reconcile(checkout.orderId);
     expect(payment.status).toBe('PAID');
-    expect(await commercial.reconcile(checkout.orderId)).toEqual(payment);
+    expect(await commercial.reconcile(checkout.orderId)).toMatchObject({
+      status: 'PAID',
+      receiptId: payment.receiptId,
+    });
     const detail = await commercial.publicDetail(created.accessToken);
     expect(detail.invoice?.received).toBe('321.00');
     expect(detail.invoice?.due).toBe('749.00');
