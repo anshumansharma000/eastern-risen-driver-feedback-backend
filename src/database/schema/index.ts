@@ -15,3 +15,9 @@ export * from '../../modules/core/persistence/billing.schema.js';
 export * from '../../modules/core/persistence/commercial.schema.js';
 
 export * from '../../modules/customer/customer.schema.js';
+
+export * from './timeline.js';
+
+export * from '../../modules/core/persistence/inquiries.schema.js';
+
+export * from '../../modules/core/persistence/announcements.schema.js';

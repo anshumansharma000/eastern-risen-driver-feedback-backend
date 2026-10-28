@@ -1,3 +1,8 @@
+import {
+  adminTimelineRoutes,
+  driverTimelineRoutes,
+  linkTimelineRoutes,
+} from './modules/timeline/timeline.routes.js';
 import { customerRoutes, customerAccessRoutes } from './modules/customer/customer.routes.js';
 import { coreRoutes } from './modules/core/index.js';
 import cookie from '@fastify/cookie';
@@ -89,6 +94,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         { name: 'core billing', description: 'Invoices, receipts and settlement adjustments' },
         { name: 'core reports', description: 'Receivables and guest activity' },
         { name: 'core shared catalog', description: 'Shared vendor and vehicle catalog adapters' },
+        {
+          name: 'feedback timeline',
+          description: 'Feedback-product driver milestones, booking links and progress',
+        },
         { name: 'health', description: 'Service health and readiness' },
         { name: 'authentication', description: 'Administrator and driver sessions' },
         { name: 'drivers', description: 'Administrator-managed driver accounts' },
@@ -134,6 +143,20 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   });
 
   if (options.services) {
+    await app.register(adminTimelineRoutes, {
+      prefix: '/api/v1/admin/timeline',
+      timelineService: options.services.timelineService,
+      guards: options.services.guards,
+    });
+    await app.register(driverTimelineRoutes, {
+      prefix: '/api/v1/driver/timeline',
+      timelineService: options.services.timelineService,
+      guards: options.services.guards,
+    });
+    await app.register(linkTimelineRoutes, {
+      prefix: '/api/v1/driver-link/timeline',
+      timelineService: options.services.timelineService,
+    });
     await app.register(customerRoutes, {
       prefix: '/api/v1/customer',
       service: options.services.customerService,

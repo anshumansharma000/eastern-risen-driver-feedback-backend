@@ -1,5 +1,6 @@
 export interface TripView {
   readonly id: string;
+  readonly assignmentVersion?: number;
   readonly engagementId: string | null;
   readonly bookingId: string;
   readonly bookingReference: string;
@@ -30,6 +31,7 @@ type QuestionnairePurpose = 'ARRIVAL_EXPERIENCE' | 'DRIVER_FEEDBACK' | 'TOUR_EXP
 export function presentTrip(trip: TripView) {
   return {
     id: trip.id,
+    assignmentVersion: trip.assignmentVersion ?? 1,
     engagementId: trip.engagementId,
     booking: {
       id: trip.bookingId,

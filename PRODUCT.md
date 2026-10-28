@@ -993,3 +993,15 @@ and issuing-company tenancy. There is no automatic historical ownership matching
 Private booking links retain their independent access and existing contracts.
 Activation delivery may be manual; self-service recovery requires the configured
 transactional mail service and durable queue worker described in that specification.
+
+
+## Feedback product: operational trip updates
+
+The feedback product includes driver milestones and a combined booking timeline.
+Drivers report trip start, pickup, arrival, drop-off, completion, notes and delays
+through login or a booking-specific driver link. Updates are timestamped, can
+include private photos and optionally include driver-authorised geotags. Admins
+view progress and updates in the feedback dashboard. Operational trip state is
+independent of passenger feedback state and core commercial booking state.
+[FEEDBACK_TIMELINE_API.md](FEEDBACK_TIMELINE_API.md) defines the implemented access,
+assignment, correction, photo, reporting-window and offline contracts.

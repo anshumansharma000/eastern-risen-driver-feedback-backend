@@ -78,6 +78,7 @@ export const driverTripListQuerySchema = Type.Object({
 });
 
 export const tripSchema = Type.Object({
+  assignmentVersion: Type.Integer({ minimum: 1 }),
   id: Type.String({ format: 'uuid' }),
   engagementId: Type.Union([Type.String({ format: 'uuid' }), Type.Null()]),
   booking: Type.Object({

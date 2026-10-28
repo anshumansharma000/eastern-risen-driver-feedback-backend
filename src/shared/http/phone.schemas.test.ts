@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Check } from 'typebox/value';
 import { updateDriverBodySchema } from '../../modules/drivers/driver.schemas.js';
 import { submitFeedbackBodySchema } from '../../modules/feedback/feedback.schemas.js';
+import { normalizeRespondentPhone } from '../../modules/feedback/respondent-phone.js';
 import { updateDriverProfileBodySchema } from '../../modules/profiles/profile.schemas.js';
 import { updateVendorBodySchema } from '../../modules/vendors/vendor.schemas.js';
 import { e164PhoneSchema } from './phone.schemas.js';
@@ -28,7 +29,7 @@ describe('E.164 phone contract', () => {
     expect(Check(updateVendorBodySchema, { contactPhone: formattedPhone })).toBe(false);
   });
 
-  it('applies the contract to new passenger feedback submissions', () => {
+  it('allows formatted passenger phones which the feedback service normalizes', () => {
     const submission = {
       clientSubmissionId: '00000000-0000-4000-8000-000000000001',
       questionnaireSnapshot: {},
@@ -51,6 +52,7 @@ describe('E.164 phone contract', () => {
         ...submission,
         respondent: { ...submission.respondent, phone: formattedPhone },
       }),
-    ).toBe(false);
+    ).toBe(true);
+    expect(normalizeRespondentPhone(formattedPhone)).toBe(canonicalPhone);
   });
 });

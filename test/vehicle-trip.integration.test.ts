@@ -472,6 +472,7 @@ integration('vehicle and trip APIs', () => {
     expect(driverFeedbackLink.json()).toEqual({
       data: {
         engagementId: adminLinkData.engagementId,
+        allowMultipleSubmissions: false,
         feedbackLink: adminLinkData.feedbackLink,
         feedbackAccessTokenExpiresAt: adminLinkData.feedbackAccessTokenExpiresAt,
       },
@@ -523,6 +524,7 @@ integration('vehicle and trip APIs', () => {
     expect(startedFeedbackLink.json()).toEqual({
       data: {
         engagementId: adminLinkData.engagementId,
+        allowMultipleSubmissions: false,
         feedbackLink: adminLinkData.feedbackLink,
         feedbackAccessTokenExpiresAt: adminLinkData.feedbackAccessTokenExpiresAt,
       },

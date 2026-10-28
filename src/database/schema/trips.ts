@@ -86,6 +86,7 @@ export const trips = pgTable(
   'trips',
   {
     id: uuid('id').primaryKey().defaultRandom(),
+    assignmentVersion: integer('assignment_version').notNull().default(1),
     bookingId: uuid('booking_id')
       .notNull()
       .references(() => bookings.id, { onDelete: 'restrict' }),

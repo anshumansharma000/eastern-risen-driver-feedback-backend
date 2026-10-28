@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
   check,
+  boolean,
   doublePrecision,
   index,
   integer,
@@ -48,6 +49,7 @@ export const feedbackHandoffs = pgTable(
     tokenCiphertext: text('token_ciphertext').notNull(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     consumedAt: timestamp('consumed_at', { withTimezone: true }),
+    allowMultipleSubmissions: boolean('allow_multiple_submissions').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
@@ -98,6 +100,9 @@ export const feedbackSubmissions = pgTable(
     bookingReferenceSnapshot: text('booking_reference_snapshot').notNull(),
     respondentName: text('respondent_name').notNull(),
     respondentPhoneCiphertext: text('respondent_phone_ciphertext').notNull(),
+    // Legacy single-response submissions have no fingerprint. New responses always do.
+    respondentPhoneHash: text('respondent_phone_hash'),
+    allowMultipleSubmissions: boolean('allow_multiple_submissions').notNull().default(false),
     respondentEmailCiphertext: text('respondent_email_ciphertext').notNull(),
     respondentBookingReference: text('respondent_booking_reference').notNull(),
     consentVersionId: uuid('consent_version_id')
@@ -123,11 +128,20 @@ export const feedbackSubmissions = pgTable(
   },
   (table) => [
     uniqueIndex('feedback_submissions_client_id_unique').on(table.clientSubmissionId),
-    uniqueIndex('feedback_submissions_engagement_unique').on(table.engagementId),
+    uniqueIndex('feedback_submissions_single_engagement_unique')
+      .on(table.engagementId)
+      .where(sql`${table.allowMultipleSubmissions} = false`),
+    uniqueIndex('feedback_submissions_engagement_phone_unique')
+      .on(table.engagementId, table.respondentPhoneHash)
+      .where(sql`${table.respondentPhoneHash} is not null`),
     index('feedback_submissions_driver_received_idx').on(table.driverId, table.receivedAt),
     index('feedback_submissions_review_received_idx').on(
       table.currentReviewState,
       table.receivedAt,
+    ),
+    check(
+      'feedback_submissions_group_phone_required',
+      sql`${table.allowMultipleSubmissions} = false OR ${table.respondentPhoneHash} IS NOT NULL`,
     ),
     check(
       'feedback_submissions_archive_state_check',

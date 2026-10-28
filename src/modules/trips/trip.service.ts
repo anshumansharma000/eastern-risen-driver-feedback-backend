@@ -2,6 +2,10 @@ import { and, asc, count, desc, eq, gt, inArray, isNull, lt, ne, sql, type SQL }
 import type { AppDatabase } from '../../database/client.js';
 import {
   auditEvents,
+  timelineProgress,
+  timelineEvents,
+  driverBookingLinks,
+  driverLinkTrips,
   authAccounts,
   bookingDriverEngagements,
   bookings,
@@ -53,6 +57,7 @@ export interface ListTripsInput {
 
 const tripSelection = {
   id: trips.id,
+  assignmentVersion: trips.assignmentVersion,
   bookingId: trips.bookingId,
   engagementId: trips.engagementId,
   bookingReference: bookings.bookingReference,
@@ -128,6 +133,38 @@ export class TripService {
           `driver:${driverId}`,
           `vehicle:${vehicleId}`,
         ]);
+        const [lockedTrip] = await tx.select().from(trips).where(eq(trips.id, id)).for('update');
+        if (!lockedTrip || lockedTrip.updatedAt.getTime() !== current.updatedAt.getTime()) {
+          throw new AppError({
+            code: 'TRIP_ASSIGNMENT_CHANGED',
+            message: 'Trip changed; reload before editing',
+            statusCode: 409,
+          });
+        }
+        const [history] = await tx
+          .select({ id: timelineEvents.id })
+          .from(timelineEvents)
+          .where(eq(timelineEvents.tripId, id))
+          .limit(1);
+        const [progress] = await tx
+          .select()
+          .from(timelineProgress)
+          .where(eq(timelineProgress.tripId, id));
+        if (
+          (history || (progress && !['UNKNOWN', 'SCHEDULED'].includes(progress.status))) &&
+          bookingId !== current.bookingId
+        )
+          throw new AppError({
+            code: 'TRIP_TIMELINE_BOOKING_LOCKED',
+            message: 'A trip with timeline history cannot be moved to another booking',
+            statusCode: 409,
+          });
+        if (driverId !== current.driverId && progress?.status === 'COMPLETED')
+          throw new AppError({
+            code: 'TRIP_OPERATION_COMPLETED',
+            message: 'Reopen the completed trip before reassigning it',
+            statusCode: 409,
+          });
         await this.ensureBookingScheduleEditable(tx, current.bookingId);
         if (bookingId !== current.bookingId)
           await this.ensureBookingScheduleEditable(tx, bookingId);
@@ -141,6 +178,10 @@ export class TripService {
           .update(trips)
           .set({
             bookingId: booking.id,
+            assignmentVersion:
+              driverId !== current.driverId || bookingId !== current.bookingId
+                ? lockedTrip.assignmentVersion + 1
+                : lockedTrip.assignmentVersion,
             ...(input.pickupLocation !== undefined
               ? { pickupLocation: input.pickupLocation.trim() }
               : {}),
@@ -173,6 +214,31 @@ export class TripService {
             statusCode: 409,
           });
         }
+        if (driverId !== current.driverId || bookingId !== current.bookingId) {
+          // Revoke the old pair when it has no remaining assignments. A returning driver gets fresh access.
+          const [remaining] = await tx
+            .select({ id: trips.id })
+            .from(trips)
+            .where(
+              and(
+                eq(trips.bookingId, current.bookingId),
+                eq(trips.driverId, current.driverId),
+                ne(trips.status, 'ARCHIVED'),
+              ),
+            )
+            .limit(1);
+          if (!remaining)
+            await tx
+              .update(driverBookingLinks)
+              .set({ revokedAt: new Date() })
+              .where(
+                and(
+                  eq(driverBookingLinks.bookingId, current.bookingId),
+                  eq(driverBookingLinks.driverId, current.driverId),
+                  isNull(driverBookingLinks.revokedAt),
+                ),
+              );
+        }
         await this.rebuildEngagements(tx, current.bookingId, actorAccountId);
         if (bookingId !== current.bookingId)
           await this.rebuildEngagements(tx, bookingId, actorAccountId);
@@ -181,7 +247,13 @@ export class TripService {
           action: 'TRIP_UPDATED',
           entityType: 'TRIP',
           entityId: id,
-          metadata: { changedFields: Object.keys(input).sort().join(',') },
+          metadata: {
+            changedFields: Object.keys(input).sort().join(','),
+            previousDriverId: current.driverId,
+            previousBookingId: current.bookingId,
+            previousScheduledAt: current.scheduledAt.toISOString(),
+            previousScheduledEndAt: current.scheduledEndAt.toISOString(),
+          },
         });
         return [await this.findTrip(tx, eq(trips.id, id))];
       });
@@ -281,6 +353,28 @@ export class TripService {
         entityType: 'TRIP',
         entityId: id,
       });
+      const [remaining] = await tx
+        .select({ id: trips.id })
+        .from(trips)
+        .where(
+          and(
+            eq(trips.bookingId, current.bookingId),
+            eq(trips.driverId, current.driverId),
+            ne(trips.status, 'ARCHIVED'),
+          ),
+        )
+        .limit(1);
+      if (!remaining)
+        await tx
+          .update(driverBookingLinks)
+          .set({ revokedAt: now })
+          .where(
+            and(
+              eq(driverBookingLinks.bookingId, current.bookingId),
+              eq(driverBookingLinks.driverId, current.driverId),
+              isNull(driverBookingLinks.revokedAt),
+            ),
+          );
       await this.rebuildEngagements(tx, current.bookingId, actorAccountId);
       return (await this.findTrip(tx, eq(trips.id, id)))!;
     });
@@ -327,7 +421,29 @@ export class TripService {
             creationSource,
             createdByAccountId: actorAccountId,
           })
-          .returning({ id: trips.id });
+          .returning({ id: trips.id, assignmentVersion: trips.assignmentVersion });
+        await tx.insert(timelineProgress).values({ tripId: created!.id, status: 'SCHEDULED' });
+        // Creation shares the booking lock with link issuance/revocation. Only this new
+        // assignment is granted; existing grants must retain their original versions.
+        const links = await tx
+          .select({ id: driverBookingLinks.id })
+          .from(driverBookingLinks)
+          .where(
+            and(
+              eq(driverBookingLinks.bookingId, booking.id),
+              eq(driverBookingLinks.driverId, driver.id),
+              isNull(driverBookingLinks.revokedAt),
+              gt(driverBookingLinks.expiresAt, new Date()),
+            ),
+          );
+        if (links.length)
+          await tx.insert(driverLinkTrips).values(
+            links.map((link) => ({
+              linkId: link.id,
+              tripId: created!.id,
+              assignmentVersion: created!.assignmentVersion,
+            })),
+          );
         await this.rebuildEngagements(tx, booking.id, actorAccountId);
         const trip = await this.findTrip(tx, eq(trips.id, created!.id));
         await tx.insert(auditEvents).values({

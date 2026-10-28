@@ -49,6 +49,7 @@ export const feedbackRoutes: FastifyPluginAsyncTypebox<FeedbackRouteOptions> = a
               vehicle: trip.vehicleSnapshot,
             })),
           },
+          allowMultipleSubmissions: context.allowMultipleSubmissions,
           questionnaire: context.snapshot,
           consent: {
             id: context.consent.id,

@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { and, eq, getTableColumns, sql } from 'drizzle-orm';
 import type { AppDatabase } from '../../database/client.js';
 import {
+  auditEvents,
   feedbackAnswers,
   feedbackHandoffs,
   feedbackHandoffSections,
@@ -14,7 +15,7 @@ import {
   engagementFeedbackSections,
   trips,
 } from '../../database/schema/index.js';
-import { isPostgresError } from '../../shared/database/postgres-error.js';
+import { findPostgresError } from '../../shared/database/postgres-error.js';
 import type { FieldEncryptor } from '../../shared/security/field-encryption.js';
 import { AppError } from '../../shared/errors/app-error.js';
 import {
@@ -25,6 +26,7 @@ import {
 import type { QuestionnaireService } from '../questionnaires/questionnaire.service.js';
 import type { SettingsService } from '../settings/settings.service.js';
 import { validateFeedbackAnswers } from './answer.validator.js';
+import { normalizeRespondentPhone } from './respondent-phone.js';
 import {
   buildCompositeQuestionnaireSnapshot,
   buildQuestionnaireSnapshot,
@@ -61,7 +63,7 @@ export class FeedbackService {
     private readonly now: () => Date = () => new Date(),
   ) {}
 
-  async issueHandoff(engagementId: string) {
+  async issueHandoff(engagementId: string, input: { allowMultipleSubmissions?: boolean } = {}) {
     return this.db.transaction(async (tx) => {
       const [candidate] = await tx
         .select({ bookingId: bookingDriverEngagements.bookingId })
@@ -82,39 +84,76 @@ export class FeedbackService {
       );
       await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${engagementId}, 0))`);
 
-      const [existingSubmission] = await tx
-        .select({ id: feedbackSubmissions.id })
-        .from(feedbackSubmissions)
-        .where(eq(feedbackSubmissions.engagementId, engagementId))
-        .limit(1);
       const [engagement] = await tx
         .select()
         .from(bookingDriverEngagements)
         .where(eq(bookingDriverEngagements.id, engagementId))
         .limit(1);
-      if (
-        existingSubmission ||
-        (engagement?.status !== 'READY' && engagement?.status !== 'FEEDBACK_STARTED')
-      ) {
-        throw new AppError({
-          code: 'FEEDBACK_HANDOFF_UNAVAILABLE',
-          message: 'Passenger feedback is unavailable for this engagement',
-          statusCode: 409,
-        });
-      }
+      if (!engagement || !['READY', 'FEEDBACK_STARTED'].includes(engagement.status))
+        this.unavailableHandoff();
       const [existingHandoff] = await tx
         .select()
         .from(feedbackHandoffs)
         .where(eq(feedbackHandoffs.engagementId, engagementId))
         .limit(1);
+      const allowMultipleSubmissions =
+        input.allowMultipleSubmissions ?? existingHandoff?.allowMultipleSubmissions ?? false;
+      const [existingSubmission] = await tx
+        .select({ id: feedbackSubmissions.id })
+        .from(feedbackSubmissions)
+        .where(eq(feedbackSubmissions.engagementId, engagementId))
+        .limit(1);
+      if (
+        existingSubmission &&
+        (!existingHandoff?.allowMultipleSubmissions || existingHandoff.consumedAt)
+      )
+        this.unavailableHandoff();
+      if (
+        engagement.status !== 'READY' &&
+        existingHandoff &&
+        allowMultipleSubmissions !== existingHandoff.allowMultipleSubmissions
+      ) {
+        throw new AppError({
+          code: 'FEEDBACK_LINK_MODE_LOCKED',
+          message: 'The submission mode cannot change after passenger feedback has started',
+          statusCode: 409,
+        });
+      }
       const now = this.now();
       if (existingHandoff && !existingHandoff.consumedAt && existingHandoff.expiresAt > now) {
+        if (allowMultipleSubmissions !== existingHandoff.allowMultipleSubmissions)
+          await tx
+            .update(feedbackHandoffs)
+            .set({ allowMultipleSubmissions })
+            .where(eq(feedbackHandoffs.id, existingHandoff.id));
         const token = this.encryptor.decrypt(existingHandoff.tokenCiphertext);
         return {
           engagementId,
           token,
           expiresAt: existingHandoff.expiresAt,
           link: this.buildHandoffLink(token),
+          allowMultipleSubmissions,
+        };
+      }
+      // A renewed collection retains its published questions and existing responses.
+      if (existingHandoff && engagement.status === 'FEEDBACK_STARTED') {
+        if (existingHandoff.consumedAt) this.unavailableHandoff();
+        const token = randomBytes(32).toString('base64url');
+        const expiresAt = new Date(now.getTime() + this.handoffTtlHours * 60 * 60 * 1000);
+        await tx
+          .update(feedbackHandoffs)
+          .set({
+            tokenHash: hashToken(token),
+            tokenCiphertext: this.encryptor.encrypt(token),
+            expiresAt,
+          })
+          .where(eq(feedbackHandoffs.id, existingHandoff.id));
+        return {
+          engagementId,
+          token,
+          expiresAt,
+          link: this.buildHandoffLink(token),
+          allowMultipleSubmissions,
         };
       }
 
@@ -153,6 +192,7 @@ export class FeedbackService {
             tokenCiphertext,
             expiresAt,
             consumedAt: null,
+            allowMultipleSubmissions,
           })
           .where(eq(feedbackHandoffs.id, existingHandoff.id));
         await tx
@@ -168,6 +208,7 @@ export class FeedbackService {
             tokenHash,
             tokenCiphertext,
             expiresAt,
+            allowMultipleSubmissions,
           })
           .returning({ id: feedbackHandoffs.id });
         if (!createdHandoff) throw new Error('Feedback handoff insert did not return a row');
@@ -183,7 +224,13 @@ export class FeedbackService {
         })),
       );
 
-      return { engagementId, token, expiresAt, link: this.buildHandoffLink(token) };
+      return {
+        engagementId,
+        token,
+        expiresAt,
+        link: this.buildHandoffLink(token),
+        allowMultipleSubmissions,
+      };
     });
   }
 
@@ -199,6 +246,7 @@ export class FeedbackService {
       this.invalidHandoff();
     return {
       engagement,
+      allowMultipleSubmissions: handoff.allowMultipleSubmissions,
       questionnaireSections,
       consent,
       settings,
@@ -462,62 +510,85 @@ export class FeedbackService {
   }
 
   async submit(token: string, input: SubmitFeedbackInput) {
-    const handoff = await this.resolveHandoff(token, false);
-    const [replayed] = await this.db
-      .select()
-      .from(feedbackSubmissions)
-      .where(eq(feedbackSubmissions.clientSubmissionId, input.clientSubmissionId))
-      .limit(1);
-    if (replayed) {
-      if (replayed.engagementId !== handoff.engagementId)
-        throw new AppError({
-          code: 'CLIENT_SUBMISSION_ID_CONFLICT',
-          message: 'This client submission ID belongs to another engagement',
-          statusCode: 409,
-        });
-      return receipt(replayed, true);
-    }
-    const [existingForEngagement] = await this.db
-      .select({ id: feedbackSubmissions.id })
-      .from(feedbackSubmissions)
-      .where(eq(feedbackSubmissions.engagementId, handoff.engagementId))
-      .limit(1);
-    if (existingForEngagement)
-      throw new AppError({
-        code: 'ENGAGEMENT_FEEDBACK_ALREADY_SUBMITTED',
-        message: 'Feedback has already been submitted for this engagement',
-        statusCode: 409,
-      });
-    if (handoff.consumedAt || handoff.expiresAt <= this.now()) this.invalidHandoff();
-    const [engagement, questionnaireSections] = await Promise.all([
-      this.getEngagement(handoff.engagementId),
-      this.loadQuestionnaireSections(handoff),
-    ]);
-    if (engagement.status !== 'FEEDBACK_STARTED') this.unavailableHandoff();
-    if (
-      input.respondent.bookingReference.trim().toLowerCase() !==
-      engagement.bookingReference.trim().toLowerCase()
-    ) {
-      throw new AppError({
-        code: 'BOOKING_REFERENCE_MISMATCH',
-        message: 'The booking reference does not match this engagement',
-        statusCode: 400,
-      });
-    }
-    const snapshot = buildCompositeQuestionnaireSnapshot(questionnaireSections);
-    if (!isDeepStrictEqual(input.questionnaireSnapshot, snapshot)) {
-      throw new AppError({
-        code: 'QUESTIONNAIRE_SNAPSHOT_INVALID',
-        message: 'The questionnaire snapshot does not match the published version',
-        statusCode: 409,
-      });
-    }
-    const normalizedAnswers = validateFeedbackAnswers(
-      flattenCompositeQuestions(snapshot),
-      input.answers,
+    const phone = normalizeRespondentPhone(input.respondent.phone);
+    const initial = await this.resolveHandoff(token, false);
+    const candidate = await this.getEngagement(initial.engagementId);
+    const phoneHash = this.encryptor.blindIndex(
+      'feedback-respondent-phone-v1',
+      `${initial.engagementId}:${phone}`,
     );
     try {
-      const submission = await this.db.transaction(async (tx) => {
+      return await this.db.transaction(async (tx) => {
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(hashtextextended(${'booking:' + candidate.bookingId}, 0))`,
+        );
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(hashtextextended(${initial.engagementId}, 0))`,
+        );
+        // Re-resolve after locking: renewal/closure must never race a new response.
+        const [handoff] = await tx
+          .select()
+          .from(feedbackHandoffs)
+          .where(eq(feedbackHandoffs.tokenHash, hashToken(token)))
+          .limit(1);
+        if (!handoff) this.invalidHandoff();
+        const [replayed] = await tx
+          .select()
+          .from(feedbackSubmissions)
+          .where(eq(feedbackSubmissions.clientSubmissionId, input.clientSubmissionId))
+          .limit(1);
+        if (replayed) {
+          this.assertReplayIdentity(replayed, handoff.engagementId, phone);
+          return receipt(replayed, true);
+        }
+        // Preserve the single-response duplicate error, even after its link was consumed.
+        if (!handoff.allowMultipleSubmissions) {
+          const [existing] = await tx
+            .select({ id: feedbackSubmissions.id })
+            .from(feedbackSubmissions)
+            .where(eq(feedbackSubmissions.engagementId, handoff.engagementId))
+            .limit(1);
+          if (existing) this.alreadySubmitted(false);
+        }
+        if (handoff.consumedAt || handoff.expiresAt <= this.now()) this.invalidHandoff();
+        const engagement = await this.getEngagement(handoff.engagementId);
+        if (engagement.status !== 'FEEDBACK_STARTED') this.unavailableHandoff();
+        if (handoff.allowMultipleSubmissions) {
+          const [existing] = await tx
+            .select({ id: feedbackSubmissions.id })
+            .from(feedbackSubmissions)
+            .where(
+              and(
+                eq(feedbackSubmissions.engagementId, handoff.engagementId),
+                eq(feedbackSubmissions.respondentPhoneHash, phoneHash),
+              ),
+            )
+            .limit(1);
+          if (existing) this.alreadySubmitted(true);
+        }
+        const questionnaireSections = await this.loadQuestionnaireSections(handoff);
+        if (
+          input.respondent.bookingReference.trim().toLowerCase() !==
+          engagement.bookingReference.trim().toLowerCase()
+        ) {
+          throw new AppError({
+            code: 'BOOKING_REFERENCE_MISMATCH',
+            message: 'The booking reference does not match this engagement',
+            statusCode: 400,
+          });
+        }
+        const snapshot = buildCompositeQuestionnaireSnapshot(questionnaireSections);
+        if (!isDeepStrictEqual(input.questionnaireSnapshot, snapshot)) {
+          throw new AppError({
+            code: 'QUESTIONNAIRE_SNAPSHOT_INVALID',
+            message: 'The questionnaire snapshot does not match the published version',
+            statusCode: 409,
+          });
+        }
+        const normalizedAnswers = validateFeedbackAnswers(
+          flattenCompositeQuestions(snapshot),
+          input.answers,
+        );
         let photoToAttach: typeof feedbackPhotos.$inferSelect | undefined;
         if (input.photoId) {
           [photoToAttach] = await tx
@@ -551,7 +622,9 @@ export class FeedbackService {
             vendorNameSnapshot: engagement.vendorNameSnapshot,
             bookingReferenceSnapshot: engagement.bookingReference,
             respondentName: input.respondent.name.trim(),
-            respondentPhoneCiphertext: this.encryptor.encrypt(input.respondent.phone.trim()),
+            respondentPhoneCiphertext: this.encryptor.encrypt(phone),
+            respondentPhoneHash: phoneHash,
+            allowMultipleSubmissions: handoff.allowMultipleSubmissions,
             respondentEmailCiphertext: this.encryptor.encrypt(
               input.respondent.email.trim().toLowerCase(),
             ),
@@ -581,7 +654,7 @@ export class FeedbackService {
               ...answer,
             })),
           );
-        const now = new Date();
+        const now = this.now();
         if (photoToAttach) {
           const [attached] = await tx
             .update(feedbackPhotos)
@@ -600,47 +673,117 @@ export class FeedbackService {
             });
           }
         }
-        const [submittedEngagement] = await tx
-          .update(bookingDriverEngagements)
-          .set({ status: 'SUBMITTED', updatedAt: now })
-          .where(
-            and(
-              eq(bookingDriverEngagements.id, engagement.id),
-              eq(bookingDriverEngagements.status, 'FEEDBACK_STARTED'),
-            ),
-          )
-          .returning({ id: bookingDriverEngagements.id });
-        if (!submittedEngagement) {
-          throw new AppError({
-            code: 'ENGAGEMENT_FEEDBACK_STATE_CONFLICT',
-            message: 'The engagement is no longer accepting feedback',
-            statusCode: 409,
-          });
+        if (!handoff.allowMultipleSubmissions) {
+          const [submittedEngagement] = await tx
+            .update(bookingDriverEngagements)
+            .set({ status: 'SUBMITTED', updatedAt: now })
+            .where(
+              and(
+                eq(bookingDriverEngagements.id, engagement.id),
+                eq(bookingDriverEngagements.status, 'FEEDBACK_STARTED'),
+              ),
+            )
+            .returning({ id: bookingDriverEngagements.id });
+          if (!submittedEngagement) this.unavailableHandoff();
+          await tx
+            .update(feedbackHandoffs)
+            .set({ consumedAt: now })
+            .where(eq(feedbackHandoffs.id, handoff.id));
         }
-        await tx
-          .update(feedbackHandoffs)
-          .set({ consumedAt: now })
-          .where(eq(feedbackHandoffs.id, handoff.id));
-        return created;
+        return receipt(created, false);
       });
-      return receipt(submission, false);
     } catch (error) {
-      if (isPostgresError(error, '23505')) {
+      const postgresError = findPostgresError(error, '23505');
+      if (postgresError) {
         const [sameClient] = await this.db
           .select()
           .from(feedbackSubmissions)
           .where(eq(feedbackSubmissions.clientSubmissionId, input.clientSubmissionId))
           .limit(1);
-        if (sameClient && sameClient.engagementId === handoff.engagementId)
+        if (sameClient) {
+          this.assertReplayIdentity(sameClient, initial.engagementId, phone);
           return receipt(sameClient, true);
-        throw new AppError({
-          code: 'ENGAGEMENT_FEEDBACK_ALREADY_SUBMITTED',
-          message: 'Feedback has already been submitted for this engagement',
-          statusCode: 409,
-        });
+        }
+        if (postgresError.constraint === 'feedback_submissions_engagement_phone_unique')
+          this.alreadySubmitted(true);
+        if (postgresError.constraint === 'feedback_submissions_single_engagement_unique')
+          this.alreadySubmitted(false);
       }
       throw error;
     }
+  }
+
+  private assertReplayIdentity(
+    row: typeof feedbackSubmissions.$inferSelect,
+    engagementId: string,
+    phone: string,
+  ) {
+    if (
+      row.engagementId !== engagementId ||
+      normalizeRespondentPhone(this.encryptor.decrypt(row.respondentPhoneCiphertext)) !== phone
+    ) {
+      throw new AppError({
+        code: 'CLIENT_SUBMISSION_ID_CONFLICT',
+        message: 'This client submission ID belongs to another respondent or engagement',
+        statusCode: 409,
+      });
+    }
+  }
+
+  private alreadySubmitted(multiple: boolean): never {
+    throw new AppError({
+      code: multiple
+        ? 'RESPONDENT_FEEDBACK_ALREADY_SUBMITTED'
+        : 'ENGAGEMENT_FEEDBACK_ALREADY_SUBMITTED',
+      message: multiple
+        ? 'Feedback has already been submitted using this phone number for this engagement'
+        : 'Feedback has already been submitted for this engagement',
+      statusCode: 409,
+    });
+  }
+
+  async closeHandoff(engagementId: string, actorAccountId: string) {
+    const candidate = await this.getEngagement(engagementId);
+    await this.db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtextextended(${'booking:' + candidate.bookingId}, 0))`,
+      );
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${engagementId}, 0))`);
+      const [handoff] = await tx
+        .select()
+        .from(feedbackHandoffs)
+        .where(eq(feedbackHandoffs.engagementId, engagementId))
+        .limit(1);
+      if (!handoff || !handoff.allowMultipleSubmissions) this.unavailableHandoff();
+      if (handoff.consumedAt) return;
+      const [engagement] = await tx
+        .select()
+        .from(bookingDriverEngagements)
+        .where(eq(bookingDriverEngagements.id, engagementId))
+        .limit(1);
+      if (!engagement || !['READY', 'FEEDBACK_STARTED'].includes(engagement.status))
+        this.unavailableHandoff();
+      const now = this.now();
+      await tx
+        .update(feedbackHandoffs)
+        .set({ consumedAt: now })
+        .where(eq(feedbackHandoffs.id, handoff.id));
+      await tx
+        .update(bookingDriverEngagements)
+        .set({ status: 'SUBMITTED', updatedAt: now })
+        .where(
+          and(
+            eq(bookingDriverEngagements.id, engagementId),
+            sql`${bookingDriverEngagements.status} in ('READY', 'FEEDBACK_STARTED')`,
+          ),
+        );
+      await tx.insert(auditEvents).values({
+        actorAccountId,
+        action: 'GROUP_FEEDBACK_CLOSED',
+        entityType: 'BOOKING_DRIVER_ENGAGEMENT',
+        entityId: engagementId,
+      });
+    });
   }
 
   private async resolveHandoff(token: string, enforceUsable: boolean) {

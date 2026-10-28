@@ -4,6 +4,24 @@ Fastify and TypeScript backend for the Driver Feedback Service described in
 [PRODUCT.md](PRODUCT.md). The logical persistence model is documented in
 [DATA_MODEL.md](DATA_MODEL.md).
 
+## Driver milestones and booking links
+
+The feedback product now supports operational trip progress, timestamped driver
+milestones, optional geotags and private photos. Drivers can use their existing
+login or a booking-specific link. Feedback administrators can inspect the combined
+booking timeline and manage access. See [FEEDBACK_TIMELINE_API.md](FEEDBACK_TIMELINE_API.md)
+for rollout, endpoints, permissions and the frontend/offline contract. The comprehensive
+[frontend implementation prompt](FRONTEND_DRIVER_TIMELINE_PROMPT.md) covers the driver
+and admin screens, link access, uploads and offline queues. This feature
+is separate from the core API.
+
+## Group passenger feedback
+
+Passenger feedback links can optionally collect multiple traveller responses, with
+one response per normalized phone number and driver engagement. See
+[GROUP_FEEDBACK_API.md](GROUP_FEEDBACK_API.md) for migration `0028_group_feedback.sql`,
+link generation, duplicate handling, collection closure and required frontend changes.
+
 ## Core API
 
 The same application now includes a modular core API under `/api/v1/core`, with a

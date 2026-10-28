@@ -18,6 +18,7 @@ export interface R2Config {
 }
 
 export interface AppConfig {
+  readonly driverBookingUrl: string | null;
   readonly paymentPendingReviewAfterHours: number;
   readonly paymentClosedRecheckDays: number;
   readonly paymentReconciliationWorkerEnabled: boolean;
@@ -154,6 +155,9 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
   }
 
   return {
+    driverBookingUrl: environment.DRIVER_BOOKING_URL
+      ? customerUrl('DRIVER_BOOKING_URL', environment.DRIVER_BOOKING_URL, nodeEnv)
+      : null,
     paymentPendingReviewAfterHours: parsePositiveInteger(
       'PAYMENT_PENDING_REVIEW_AFTER_HOURS',
       environment.PAYMENT_PENDING_REVIEW_AFTER_HOURS,

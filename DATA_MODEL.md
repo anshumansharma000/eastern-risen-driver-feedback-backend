@@ -941,3 +941,32 @@ Before the model is considered implemented, automated tests must prove:
 | --- | --- |
 | 2026-07-20 | Initial logical data model created from `PRODUCT.md`. |
 | 2026-07-25 | Added configurable nullable negative-feedback threshold and implemented feedback review history plus real-time aggregate read contracts. |
+
+
+## Feedback timeline persistence
+
+Feedback-owned public tables `feedback_trip_progress`, `feedback_timeline_events`,
+`feedback_timeline_photos`, `feedback_driver_booking_links` and
+`feedback_driver_link_trips` provide durable operational history and booking-scoped
+driver grants. Events reference permanent feedback booking/trip/driver IDs; they
+do not reference regenerated feedback engagements or core commercial lifecycle
+records. `trips.assignment_version` rejects stale grants and offline submissions.
+Existing operational history retains the submitting driver snapshot after
+reassignment. Legacy trip progress is UNKNOWN. See
+[FEEDBACK_TIMELINE_API.md](FEEDBACK_TIMELINE_API.md) for the complete contract.
+
+
+## Group feedback submissions
+
+Migration `0028_group_feedback.sql` adds `feedback_handoffs.allow_multiple_submissions`
+(default false). New submissions record their collection mode and an engagement-scoped
+keyed fingerprint of the normalized respondent phone, while retaining encrypted contact
+fields. Historical submissions keep a null fingerprint and single-response mode.
+
+The former engagement-wide unique index is replaced by a unique engagement index for
+single-response submissions and a unique `(engagement_id, respondent_phone_hash)` index
+for fingerprinted submissions. Group submissions must have a fingerprint. Mode is locked
+after passenger start, so a single-response collection cannot be converted after submission.
+Group responses do not consume their handoff or mark their engagement submitted; admin
+closure does both. Duplicate checks include archived responses and survive link renewal.
+See [GROUP_FEEDBACK_API.md](GROUP_FEEDBACK_API.md) for the complete lifecycle and API contract.

@@ -3,6 +3,7 @@ import type { AppDatabase } from '../../database/client.js';
 import { commercialBookings } from '../core/persistence/commercial.schema.js';
 import {
   auditEvents,
+  driverBookingLinks,
   bookingDriverEngagements,
   bookings,
   trips,
@@ -110,64 +111,85 @@ export class BookingService {
       input.startsAt ?? current.startsAt.toISOString(),
       input.endsAt ?? current.endsAt.toISOString(),
     );
-    const [outsideTrip] = await this.db
-      .select({ id: trips.id })
-      .from(trips)
-      .where(
-        and(
-          eq(trips.bookingId, id),
-          ne(trips.status, 'ARCHIVED'),
-          sql`(${trips.scheduledAt} < ${period.startsAt} OR ${trips.scheduledEndAt} > ${period.endsAt})`,
-        ),
-      )
-      .limit(1);
-    if (outsideTrip) {
-      throw new AppError({
-        code: 'BOOKING_PERIOD_EXCLUDES_TRIPS',
-        message: 'The booking period must contain all active trips',
-        statusCode: 409,
-      });
-    }
-    if (input.status === 'COMPLETED') await this.validateTourFeedbackConfiguration(id);
     try {
-      const [updated] = await this.db
-        .update(bookings)
-        .set({
-          ...(input.bookingReference !== undefined
-            ? { bookingReference: input.bookingReference.trim() }
-            : {}),
-          ...(input.commercialBookingId !== undefined
-            ? { commercialBookingId: input.commercialBookingId }
-            : {}),
-          ...(input.tourName !== undefined
-            ? { tourName: normalizeOptionalText(input.tourName) }
-            : {}),
-          ...(input.fileNumber !== undefined
-            ? { fileNumber: normalizeOptionalText(input.fileNumber) }
-            : {}),
-          ...(input.passengerName !== undefined
-            ? { passengerName: input.passengerName.trim() }
-            : {}),
-          ...(input.passengerPhone !== undefined
-            ? { passengerPhoneCiphertext: this.encryptor.encrypt(input.passengerPhone) }
-            : {}),
-          startsAt: period.startsAt,
-          endsAt: period.endsAt,
-          ...(input.notes !== undefined ? { notes: input.notes?.trim() || null } : {}),
-          ...(input.status !== undefined ? { status: input.status } : {}),
-          updatedAt: new Date(),
-        })
-        .where(and(eq(bookings.id, id), ne(bookings.status, 'ARCHIVED')))
-        .returning({ id: bookings.id });
-      if (!updated) notEditable();
-      await this.db.insert(auditEvents).values({
-        actorAccountId,
-        action: 'BOOKING_UPDATED',
-        entityType: 'BOOKING',
-        entityId: id,
-        metadata: { changedFields: Object.keys(input).sort().join(',') },
+      return await this.db.transaction(async (tx) => {
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(hashtextextended(${'booking:' + id}, 0))`,
+        );
+        const [locked] = await tx.select().from(bookings).where(eq(bookings.id, id)).for('update');
+        if (!locked || locked.updatedAt.getTime() !== current.updatedAt.getTime())
+          throw new AppError({
+            code: 'BOOKING_CHANGED',
+            message: 'Booking changed; reload before editing',
+            statusCode: 409,
+          });
+        const [outsideTrip] = await tx
+          .select({ id: trips.id })
+          .from(trips)
+          .where(
+            and(
+              eq(trips.bookingId, id),
+              ne(trips.status, 'ARCHIVED'),
+              sql`(${trips.scheduledAt} < ${period.startsAt} OR ${trips.scheduledEndAt} > ${period.endsAt})`,
+            ),
+          )
+          .limit(1);
+        if (outsideTrip) {
+          throw new AppError({
+            code: 'BOOKING_PERIOD_EXCLUDES_TRIPS',
+            message: 'The booking period must contain all active trips',
+            statusCode: 409,
+          });
+        }
+        if (input.status === 'COMPLETED') await this.validateTourFeedbackConfiguration(id, tx);
+        const [updated] = await tx
+          .update(bookings)
+          .set({
+            ...(input.bookingReference !== undefined
+              ? { bookingReference: input.bookingReference.trim() }
+              : {}),
+            ...(input.commercialBookingId !== undefined
+              ? { commercialBookingId: input.commercialBookingId }
+              : {}),
+            ...(input.tourName !== undefined
+              ? { tourName: normalizeOptionalText(input.tourName) }
+              : {}),
+            ...(input.fileNumber !== undefined
+              ? { fileNumber: normalizeOptionalText(input.fileNumber) }
+              : {}),
+            ...(input.passengerName !== undefined
+              ? { passengerName: input.passengerName.trim() }
+              : {}),
+            ...(input.passengerPhone !== undefined
+              ? { passengerPhoneCiphertext: this.encryptor.encrypt(input.passengerPhone) }
+              : {}),
+            startsAt: period.startsAt,
+            endsAt: period.endsAt,
+            ...(input.notes !== undefined ? { notes: input.notes?.trim() || null } : {}),
+            ...(input.status !== undefined ? { status: input.status } : {}),
+            updatedAt: new Date(),
+          })
+          .where(and(eq(bookings.id, id), ne(bookings.status, 'ARCHIVED')))
+          .returning({ id: bookings.id });
+        if (!updated) notEditable();
+        await tx.insert(auditEvents).values({
+          actorAccountId,
+          action: 'BOOKING_UPDATED',
+          entityType: 'BOOKING',
+          entityId: id,
+          metadata: { changedFields: Object.keys(input).sort().join(',') },
+        });
+        if (input.status === 'CANCELLED')
+          await tx
+            .update(driverBookingLinks)
+            .set({ revokedAt: new Date() })
+            .where(eq(driverBookingLinks.bookingId, id));
+        const [result] = await tx
+          .select(bookingSelection)
+          .from(bookings)
+          .where(eq(bookings.id, id));
+        return this.withPassengerPhone(result!);
       });
-      return this.get(id);
     } catch (error) {
       throw mapBookingError(error);
     }
@@ -209,26 +231,34 @@ export class BookingService {
   }
 
   async archive(id: string, actorAccountId: string) {
-    const now = new Date();
-    const [booking] = await this.db
-      .update(bookings)
-      .set({ status: 'ARCHIVED', archivedAt: now, updatedAt: now })
-      .where(eq(bookings.id, id))
-      .returning({ id: bookings.id });
-    if (!booking) {
-      throw new AppError({
-        code: 'BOOKING_NOT_FOUND',
-        message: 'Booking was not found',
-        statusCode: 404,
+    return this.db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${'booking:' + id}, 0))`);
+      const now = new Date();
+      const [booking] = await tx
+        .update(bookings)
+        .set({ status: 'ARCHIVED', archivedAt: now, updatedAt: now })
+        .where(eq(bookings.id, id))
+        .returning({ id: bookings.id });
+      if (!booking) {
+        throw new AppError({
+          code: 'BOOKING_NOT_FOUND',
+          message: 'Booking was not found',
+          statusCode: 404,
+        });
+      }
+      await tx.insert(auditEvents).values({
+        actorAccountId,
+        action: 'BOOKING_ARCHIVED',
+        entityType: 'BOOKING',
+        entityId: id,
       });
-    }
-    await this.db.insert(auditEvents).values({
-      actorAccountId,
-      action: 'BOOKING_ARCHIVED',
-      entityType: 'BOOKING',
-      entityId: id,
+      await tx
+        .update(driverBookingLinks)
+        .set({ revokedAt: now })
+        .where(eq(driverBookingLinks.bookingId, id));
+      const [result] = await tx.select(bookingSelection).from(bookings).where(eq(bookings.id, id));
+      return this.withPassengerPhone(result!);
     });
-    return this.get(id);
   }
 
   private withPassengerPhone<T extends { passengerPhoneCiphertext: string | null }>(booking: T) {
@@ -255,8 +285,11 @@ export class BookingService {
     }
   }
 
-  private async validateTourFeedbackConfiguration(bookingId: string) {
-    const [lastEngagement] = await this.db
+  private async validateTourFeedbackConfiguration(
+    bookingId: string,
+    database: Pick<AppDatabase, 'select'> = this.db,
+  ) {
+    const [lastEngagement] = await database
       .select({
         id: bookingDriverEngagements.id,
         hasTour: sql<boolean>`exists (

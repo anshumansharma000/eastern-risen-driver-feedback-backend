@@ -1,3 +1,5 @@
+import { TimelineService } from '../modules/timeline/timeline.service.js';
+import { createFieldEncryptor } from '../shared/security/field-encryption.js';
 import 'dotenv/config';
 import { and, eq, inArray, isNull, lt } from 'drizzle-orm';
 import { loadConfig } from '../config/env.js';
@@ -12,6 +14,13 @@ const database = createDatabaseClient(config);
 const storage = new R2PhotoStorage(config.r2);
 
 try {
+  const timelineDeleted = await new TimelineService(
+    database.db,
+    createFieldEncryptor(config.dataEncryptionKey),
+    storage,
+    config.driverBookingUrl,
+  ).cleanupPhotos();
+  process.stdout.write(`Deleted ${timelineDeleted} orphaned timeline photo uploads\n`);
   const now = new Date();
   const cutoff = new Date(now.getTime() - storage.orphanTtlHours * 60 * 60 * 1000);
   const expiredTemporaryObjects = await database.db

@@ -5,6 +5,7 @@ import {
   adminFeedbackShareResponseSchema,
   feedbackLinkResponseSchema,
   handoffResponseSchema,
+  issueFeedbackLinkBodySchema,
 } from '../feedback/feedback.schemas.js';
 import type { FeedbackService } from '../feedback/feedback.service.js';
 import { idParamsSchema } from '../vendors/vendor.schemas.js';
@@ -90,6 +91,46 @@ export const adminEngagementRoutes: FastifyPluginAsyncTypebox<
         ),
       ),
     }),
+  );
+
+  app.post(
+    '/:id/feedback-link',
+    {
+      schema: {
+        tags: ['engagements'],
+        summary: 'Generate a passenger feedback link with an optional group submission mode',
+        params: idParamsSchema,
+        body: issueFeedbackLinkBodySchema,
+        response: { 200: adminFeedbackShareResponseSchema },
+      },
+    },
+    async (request) => {
+      const engagement = await options.engagementService.get(request.params.id);
+      const handoff = await options.feedbackService.issueHandoff(engagement.id, request.body);
+      const booking = await options.bookingService.get(engagement.bookingId);
+      return {
+        data: {
+          ...presentFeedbackLink(handoff),
+          recipient: { name: booking.passengerName, phone: booking.passengerPhone },
+        },
+      };
+    },
+  );
+
+  app.post(
+    '/:id/close-feedback',
+    {
+      schema: {
+        tags: ['engagements'],
+        summary: 'Close group feedback collection without deleting responses',
+        params: idParamsSchema,
+        response: { 204: { type: 'null' } },
+      },
+    },
+    async (request, reply) => {
+      await options.feedbackService.closeHandoff(request.params.id, request.auth!.accountId);
+      return reply.status(204).send(null);
+    },
   );
 
   app.get(
@@ -189,7 +230,32 @@ export const driverEngagementRoutes: FastifyPluginAsyncTypebox<CommonOptions> = 
           feedbackAccessToken: handoff.token,
           feedbackAccessTokenExpiresAt: handoff.expiresAt.toISOString(),
           feedbackLink: handoff.link,
+          allowMultipleSubmissions: handoff.allowMultipleSubmissions,
         },
+      };
+    },
+  );
+
+  app.post(
+    '/:id/feedback-link',
+    {
+      schema: {
+        tags: ['driver engagements'],
+        summary: 'Generate an assigned engagement feedback link with an optional group mode',
+        params: idParamsSchema,
+        body: issueFeedbackLinkBodySchema,
+        response: { 200: feedbackLinkResponseSchema },
+      },
+    },
+    async (request) => {
+      const engagement = await options.engagementService.get(
+        request.params.id,
+        request.auth!.driverId!,
+      );
+      return {
+        data: presentFeedbackLink(
+          await options.feedbackService.issueHandoff(engagement.id, request.body),
+        ),
       };
     },
   );
@@ -219,6 +285,7 @@ export const driverEngagementRoutes: FastifyPluginAsyncTypebox<CommonOptions> = 
 function presentFeedbackLink(handoff: Awaited<ReturnType<FeedbackService['issueHandoff']>>) {
   return {
     engagementId: handoff.engagementId,
+    allowMultipleSubmissions: handoff.allowMultipleSubmissions,
     feedbackLink: handoff.link,
     feedbackAccessTokenExpiresAt: handoff.expiresAt.toISOString(),
   };

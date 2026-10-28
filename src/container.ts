@@ -1,3 +1,4 @@
+import { TimelineService } from './modules/timeline/timeline.service.js';
 import { CustomerService } from './modules/customer/customer.service.js';
 import { createSharedCatalogAdapter } from './shared/catalog/core-catalog.adapter.js';
 import { createCoreServices, type CoreServices } from './modules/core/index.js';
@@ -25,6 +26,7 @@ import { DisabledPhotoStorage, R2PhotoStorage } from './shared/storage/photo-sto
 import { CashfreeProvider } from './modules/core/integrations/cashfree.provider.js';
 
 export interface ApplicationServices {
+  readonly timelineService: TimelineService;
   readonly customerService: CustomerService;
   readonly customerCookieName: string;
   readonly core: CoreServices;
@@ -88,6 +90,7 @@ export function createApplicationServices(db: AppDatabase, config: AppConfig): A
     config.paymentPendingReviewAfterHours,
   );
   return {
+    timelineService: new TimelineService(db, encryptor, photoStorage, config.driverBookingUrl),
     customerService: new CustomerService(
       db,
       passwordHasher,

@@ -1,3 +1,7 @@
+import { AnnouncementsRepository } from './persistence/announcements.repository.js';
+import { announcementRoutes } from './http/announcements.routes.js';
+import { InquiriesRepository } from './persistence/inquiries.repository.js';
+import { inquiryRoutes } from './http/inquiries.routes.js';
 import { ReportsRepository } from './persistence/reports.repository.js';
 import { ReportingRepository } from './persistence/reporting.repository.js';
 import { PaymentsReportRepository } from './persistence/payments-report.repository.js';
@@ -31,6 +35,8 @@ export function createCoreServices(
 ) {
   const billing = new BillingRepository(db, catalog);
   return {
+    inquiries: new InquiriesRepository(db),
+    announcements: new AnnouncementsRepository(db),
     masters: new MastersRepository(db, catalog),
     reports: new ReportsRepository(db),
     reporting: new ReportingRepository(db),
@@ -80,6 +86,8 @@ export const coreRoutes: FastifyPluginAsyncTypebox<{ services: CoreServices }> =
       });
     return parentHandler.call(app, translated, request, reply);
   });
+  await app.register(announcementRoutes, { services: options.services });
+  await app.register(inquiryRoutes, { services: options.services });
   await app.register(reportRoutes, { services: options.services });
   await app.register(paymentReviewRoutes, { services: options.services });
   await app.register(masterRoutes, { services: options.services });

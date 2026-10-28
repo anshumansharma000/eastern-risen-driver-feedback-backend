@@ -1,13 +1,20 @@
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHmac, randomBytes } from 'node:crypto';
 
 export interface FieldEncryptor {
   encrypt(plaintext: string): string;
   decrypt(envelope: string): string;
+  blindIndex(domain: string, value: string): string;
 }
 
 export function createFieldEncryptor(key: Buffer): FieldEncryptor {
   if (key.length !== 32) throw new Error('Field-encryption key must contain 32 bytes');
+  const indexKey = createHmac('sha256', key).update('field-blind-index-v1').digest();
   return {
+    blindIndex(domain, value) {
+      return createHmac('sha256', indexKey)
+        .update(JSON.stringify([domain, value]))
+        .digest('hex');
+    },
     encrypt(plaintext) {
       const nonce = randomBytes(12);
       const cipher = createCipheriv('aes-256-gcm', key, nonce);

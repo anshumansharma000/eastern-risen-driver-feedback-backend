@@ -29,6 +29,11 @@ const passengerQuestionSchema = Type.Object({
   options: Type.Array(passengerOptionSchema),
 });
 
+export const issueFeedbackLinkBodySchema = Type.Object(
+  { allowMultipleSubmissions: Type.Optional(Type.Boolean()) },
+  { additionalProperties: false },
+);
+
 export const passengerContextSchema = Type.Object({
   engagement: Type.Object({
     id: Type.String({ format: 'uuid' }),
@@ -47,6 +52,7 @@ export const passengerContextSchema = Type.Object({
       { minItems: 1 },
     ),
   }),
+  allowMultipleSubmissions: Type.Boolean(),
   questionnaire: Type.Object({
     schemaVersion: Type.Literal(2),
     sections: Type.Array(
@@ -84,6 +90,7 @@ export const handoffResponseSchema = Type.Object({
     Type.Object({
       feedbackAccessToken: Type.String(),
       feedbackAccessTokenExpiresAt: Type.String({ format: 'date-time' }),
+      allowMultipleSubmissions: Type.Boolean(),
       feedbackLink: Type.String({ format: 'uri' }),
     }),
   ]),
@@ -94,6 +101,7 @@ export const feedbackLinkResponseSchema = Type.Object({
     engagementId: Type.String({ format: 'uuid' }),
     feedbackLink: Type.String({ format: 'uri' }),
     feedbackAccessTokenExpiresAt: Type.String({ format: 'date-time' }),
+    allowMultipleSubmissions: Type.Boolean(),
   }),
 });
 
@@ -102,6 +110,7 @@ export const adminFeedbackShareResponseSchema = Type.Object({
     engagementId: Type.String({ format: 'uuid' }),
     feedbackLink: Type.String({ format: 'uri' }),
     feedbackAccessTokenExpiresAt: Type.String({ format: 'date-time' }),
+    allowMultipleSubmissions: Type.Boolean(),
     recipient: Type.Object({
       name: Type.String(),
       phone: Type.Union([e164PhoneSchema, Type.Null()]),
@@ -153,7 +162,7 @@ export const submitFeedbackBodySchema = Type.Object(
     respondent: Type.Object(
       {
         name: Type.String({ minLength: 1, maxLength: 200 }),
-        phone: e164PhoneSchema,
+        phone: Type.String({ minLength: 1, maxLength: 40 }),
         email: Type.String({ format: 'email', maxLength: 320 }),
         bookingReference: Type.String({ minLength: 1, maxLength: 100 }),
         consentAccepted: Type.Literal(true),
